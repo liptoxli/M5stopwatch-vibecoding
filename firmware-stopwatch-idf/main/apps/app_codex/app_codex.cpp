@@ -17,6 +17,7 @@ namespace {
 
 constexpr uint32_t kIdleViewFrameMs = 50;
 constexpr uint32_t kActiveViewFrameMs = 33;
+constexpr uint32_t kPrimaryHoldToStopMs = 350;
 
 }  // namespace
 
@@ -183,18 +184,34 @@ void AppCodex::handleBluetoothKeys()
     auto& hal = GetHAL();
 
     if (hal.btnA.wasPressed()) {
-        _voice_active = true;
-        _voice_mode = view::CodexView::VoiceMode::Recording;
-        _voice_mode_since_ms = GetHAL().millis();
+        const uint32_t now = GetHAL().millis();
+        const bool typeless_mode = ble_bridge::is_typeless_input_mode();
+        _primary_input_down_ms = now;
+        if (typeless_mode && _voice_active) {
+            _voice_mode = view::CodexView::VoiceMode::Processing;
+        } else {
+            _voice_active = true;
+            _voice_mode = view::CodexView::VoiceMode::Recording;
+        }
+        _voice_mode_since_ms = now;
         mclog::tagDebug(getAppInfo().name, "BLE key A: primary input down");
         ble_bridge::send_typeless_option(ble_bridge::ButtonAction::Down);
     }
 
     if (hal.btnA.wasReleased()) {
-        if (_voice_active) {
+        const uint32_t now = GetHAL().millis();
+        const bool typeless_mode = ble_bridge::is_typeless_input_mode();
+        const uint32_t held_ms = _primary_input_down_ms == 0 ? 0 : now - _primary_input_down_ms;
+        _primary_input_down_ms = 0;
+        if (typeless_mode && _voice_active) {
+            if (held_ms >= kPrimaryHoldToStopMs) {
+                _voice_mode = view::CodexView::VoiceMode::Processing;
+                _voice_mode_since_ms = now;
+            }
+        } else if (_voice_active) {
             _voice_active = false;
             _voice_mode = view::CodexView::VoiceMode::Idle;
-            _voice_mode_since_ms = GetHAL().millis();
+            _voice_mode_since_ms = now;
         }
         mclog::tagDebug(getAppInfo().name, "BLE key A: primary input up");
         ble_bridge::send_typeless_option(ble_bridge::ButtonAction::Up);

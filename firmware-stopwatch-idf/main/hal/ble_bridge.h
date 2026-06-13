@@ -21,6 +21,7 @@ void set_enabled(bool enabled);
 bool is_enabled();
 bool is_connected();
 bool disconnect_current();
+bool is_typeless_input_mode();
 
 void send_typeless_option(ButtonAction action);
 void send_codex_enter();

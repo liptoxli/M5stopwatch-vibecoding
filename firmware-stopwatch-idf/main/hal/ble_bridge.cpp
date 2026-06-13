@@ -1311,6 +1311,12 @@ bool disconnect_current()
     return true;
 }
 
+bool is_typeless_input_mode()
+{
+    load_host_input_config();
+    return g_host_input_mode == HostInputMode::Typeless;
+}
+
 void send_typeless_option(ButtonAction action)
 {
     load_host_input_config();

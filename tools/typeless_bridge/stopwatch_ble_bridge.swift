@@ -20,6 +20,7 @@ private let configFileURL = supportDirectoryURL.appendingPathComponent("config.j
 private let logFileURL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Logs/stopwatch-ble-bridge.log")
 private let bridgeSettingsChangedNotification = Notification.Name("StopWatchBleBridgeSettingsChanged")
+private let typelessHoldToStopSeconds: TimeInterval = 0.35
 
 private func isSupportedDeviceName(_ name: String?) -> Bool {
     guard let name else { return false }
@@ -1619,6 +1620,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private var pendingCodexEnter = false
     private var wechatOptionDown = false
     private var wechatHeldBinding: KeyBinding?
+    private var typelessPrimaryDownAt: Date?
     private var lastRediscoverAt = Date.distantPast
     private var lastBridgeConfigPayload: String?
     private var statusWriteQueue: [(payload: String, label: String)] = []
@@ -2004,6 +2006,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private func handlePrimaryInputDown() {
         switch SettingsStore.shared.settings.inputMode {
         case .typeless:
+            typelessPrimaryDownAt = Date()
             handleTypelessToggleRequest()
         case .wechatIME:
             handleWeChatOptionDown()
@@ -2013,7 +2016,17 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private func handlePrimaryInputUp() {
         switch SettingsStore.shared.settings.inputMode {
         case .typeless:
-            log("typeless primary up ignored; Typeless mode uses toggle")
+            let heldSeconds = typelessPrimaryDownAt.map { Date().timeIntervalSince($0) } ?? 0
+            typelessPrimaryDownAt = nil
+            guard heldSeconds >= typelessHoldToStopSeconds else {
+                log("typeless primary up ignored; short tap uses toggle held=\(String(format: "%.2f", heldSeconds))s")
+                return
+            }
+            guard typelessSessionActive || lastState?.phase == "recording" else {
+                log("typeless primary up ignored; stop already handled held=\(String(format: "%.2f", heldSeconds))s")
+                return
+            }
+            handleTypelessStopRequest(reason: "hold release")
         case .wechatIME:
             handleWeChatOptionUp()
         }
@@ -2179,6 +2192,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             processingUntil = nil
             processingStartedAt = nil
             pendingCodexEnter = false
+            typelessPrimaryDownAt = nil
             lastState = nil
             sendBridgeLimited()
             log("typeless event ignored: Accessibility unavailable.")
@@ -2197,6 +2211,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             processingUntil = nil
             processingStartedAt = nil
             pendingCodexEnter = false
+            typelessPrimaryDownAt = nil
             write(VoiceState(active: false, phase: "idle", message: "Typeless 未运行"))
             log("typeless start ignored: Typeless is not running; skipped \(SettingsStore.shared.settings.leftKey.name).")
             return
@@ -2223,6 +2238,19 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             return
         }
 
+        handleTypelessStopRequest(reason: "toggle")
+    }
+
+    private func handleTypelessStopRequest(reason: String) {
+        let canStop = typelessSessionActive ||
+            lastState?.phase == "recording" ||
+            lastState?.phase == "processing" ||
+            processingUntil != nil
+        guard canStop else {
+            log("typeless stop ignored: no active session reason=\(reason)")
+            return
+        }
+
         let target = lockedInputTarget
         let snapshot = typelessFocusSnapshot
         let binding = SettingsStore.shared.settings.leftKey
@@ -2234,7 +2262,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
 
         write(VoiceState(active: true, phase: "processing", message: ""))
         scheduleProcessingFollowUps()
-        log("typeless stop via mac helper key=\(binding.name); focus restore scheduled")
+        log("typeless stop via mac helper key=\(binding.name) reason=\(reason); focus restore scheduled")
     }
 
     private func scheduleProcessingFollowUps() {
