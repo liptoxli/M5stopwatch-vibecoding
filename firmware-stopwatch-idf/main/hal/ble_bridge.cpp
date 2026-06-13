@@ -1323,8 +1323,9 @@ void send_typeless_option(ButtonAction action)
             set_host_status("WeChat input down");
             send_hid_binding_down(g_primary_binding);
         } else if (!companion_can_handle(event_ok)) {
-            mclog::tagInfo(kTag, "Primary input down ignored: Typeless requires helper");
-            set_host_status("Typeless helper required");
+            mclog::tagInfo(kTag, "Primary input down via HID fallback");
+            set_host_status("Bridge fallback key");
+            send_hid_binding_down(g_primary_binding);
         } else {
             mclog::tagInfo(kTag, "Primary input down via companion");
         }
@@ -1347,7 +1348,8 @@ void send_typeless_option(ButtonAction action)
             return;
         }
         mclog::tagInfo(kTag, "Primary input tap via HID fallback");
-        set_host_status("Typeless helper required");
+        set_host_status("Bridge fallback key");
+        send_hid_binding_tap(g_primary_binding);
         return;
     }
 
@@ -1359,7 +1361,8 @@ void send_typeless_option(ButtonAction action)
         set_host_status("WeChat input up");
         release_keyboard();
     } else if (!companion_can_handle(event_ok)) {
-        mclog::tagInfo(kTag, "Primary input up via HID fallback");
+        mclog::tagInfo(kTag, "Primary input up via HID fallback release");
+        set_host_status("Bridge fallback key");
         release_keyboard();
     } else {
         mclog::tagInfo(kTag, "Primary input up via companion");

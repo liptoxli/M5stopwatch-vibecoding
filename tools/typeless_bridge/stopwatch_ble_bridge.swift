@@ -1615,6 +1615,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private var typelessFocusSnapshot: FocusSnapshot?
     private var lockedInputTarget: InputFocusTarget?
     private var processingUntil: Date?
+    private var processingStartedAt: Date?
     private var pendingCodexEnter = false
     private var wechatOptionDown = false
     private var wechatHeldBinding: KeyBinding?
@@ -1952,7 +1953,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private func bridgeReadyPayload() -> String {
         let settings = SettingsStore.shared.settings
         let mode = settings.inputMode == .wechatIME ? "wechat_ime" : "typeless"
-        let primary = settings.inputMode == .wechatIME ? hidReportBinding(settings.leftKey) : (modifier: UInt8(0), keycode: UInt8(0))
+        let primary = hidReportBinding(settings.leftKey)
         let confirm = hidReportBinding(settings.rightKey)
         let shake = settings.shakeKey.map(hidReportBinding) ?? (modifier: UInt8(0), keycode: UInt8(0))
         let payload: [String: Any] = [
@@ -2055,6 +2056,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
 
         if processingUntil != nil || lastState?.phase == "processing" {
             processingUntil = nil
+            processingStartedAt = nil
             pendingCodexEnter = false
             log("codex enter requested while Typeless processing; sending immediately.")
             write(VoiceState(active: false, phase: "idle", message: ""))
@@ -2147,6 +2149,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             postKeyTap(keyCode: UInt16(kVK_Delete))
         }
         processingUntil = nil
+        processingStartedAt = nil
         pendingCodexEnter = false
         write(VoiceState(active: false, phase: "idle", message: ""))
         log("shake clear input via mac helper target=\(targetDescription)")
@@ -2158,6 +2161,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             typelessFocusSnapshot = nil
             lockedInputTarget = nil
             processingUntil = nil
+            processingStartedAt = nil
             pendingCodexEnter = false
             lastState = nil
             sendBridgeLimited()
@@ -2175,6 +2179,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             typelessFocusSnapshot = nil
             lockedInputTarget = nil
             processingUntil = nil
+            processingStartedAt = nil
             pendingCodexEnter = false
             write(VoiceState(active: false, phase: "idle", message: "Typeless 未运行"))
             log("typeless start ignored: Typeless is not running; skipped \(SettingsStore.shared.settings.leftKey.name).")
@@ -2208,6 +2213,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         postKeyTap(binding)
         restoreInputFocusAfterTypelessShortcut(target: target, snapshot: snapshot, reason: "stop")
         typelessSessionActive = false
+        processingStartedAt = Date()
         processingUntil = Date().addingTimeInterval(3.0)
 
         write(VoiceState(active: true, phase: "processing", message: ""))
@@ -2216,9 +2222,14 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     }
 
     private func scheduleProcessingFollowUps() {
-        for delay in [0.35, 0.8, 1.4, 3.1] {
+        for delay in [0.35, 0.8, 1.4, 2.2] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 self?.writeCurrentState(force: false)
+            }
+        }
+        for delay in [3.1, 4.1] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.writeCurrentState(force: true)
             }
         }
     }
@@ -2418,19 +2429,26 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         }
         if let until = processingUntil {
             let detected = currentTypelessState()
+            let minProcessingUntil = processingStartedAt?.addingTimeInterval(0.7) ?? Date.distantPast
             if Date() >= until {
                 processingUntil = nil
+                processingStartedAt = nil
                 if detected.phase == "recording" {
                     return detected
                 }
                 return VoiceState(active: false, phase: "idle", message: "")
             }
-            if detected.phase == "idle" && detected.message != "Typeless 待机" {
+            if detected.phase == "idle" && (detected.message != "Typeless 待机" || Date() >= minProcessingUntil) {
                 processingUntil = nil
+                processingStartedAt = nil
+                if detected.message == "Typeless 待机" {
+                    return VoiceState(active: false, phase: "idle", message: "")
+                }
                 return detected
             }
             if detected.phase == "recording" {
                 processingUntil = nil
+                processingStartedAt = nil
                 return detected
             }
             if detected.phase == "processing" {
@@ -2453,6 +2471,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         }
         let writeType: CBCharacteristicWriteType = characteristic.properties.contains(.write) ? .withResponse : .withoutResponse
         peripheral.writeValue(data, for: characteristic, type: writeType)
+        lastState = state
         BridgeStatusCenter.shared.typelessStatus = state.message.isEmpty ? state.phase : state.message
         log("state \(state.phase) active=\(state.active) message=\(state.message)")
     }
