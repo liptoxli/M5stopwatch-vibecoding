@@ -7,6 +7,7 @@ sdkconfig.old
 *.elf
 *.log
 .build/
+dist/
 *.app/
 DerivedData/
 __pycache__/

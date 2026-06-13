@@ -114,6 +114,21 @@ Do not ask users to paste tokens into the app.
 tools/typeless_bridge/build_stopwatch_ble_bridge.sh
 ```
 
+## Package Release
+
+```bash
+tools/typeless_bridge/package_release.sh 1.0.0
+```
+
+This creates:
+
+```text
+dist/StopWatch-BLE-Bridge-1.0.0-macOS-arm64.zip
+dist/StopWatch-BLE-Bridge-1.0.0-macOS-arm64.zip.sha256
+```
+
+The release package contains only the app bundle. It does not install the LaunchAgent or start the app automatically.
+
 ## Input Mode
 
 The menu bar app can switch the primary device button between `Typeless` and `WeChat IME`.
