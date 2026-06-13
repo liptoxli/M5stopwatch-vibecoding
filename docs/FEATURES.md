@@ -1,5 +1,22 @@
 # 功能说明书
 
+## 0. 项目来源
+
+本项目基于 M5Stack StopWatch 原演示固件 / UserDemo 继续开发。原演示固件提供了 StopWatch 硬件初始化、圆形 AMOLED 显示、按键、IMU、BLE、音频、LVGL 应用组织和示例应用基础。
+
+本项目新增的是 Codex vibe-coding 模块：
+
+- Codex 额度圆屏页面。
+- Codex/Pet 状态动画。
+- 顶部下拉电量状态栏。
+- BLE GATT 配置和面板 payload。
+- BLE HID fallback 按键行为。
+- macOS 菜单栏 Bridge。
+- Typeless / 微信输入法模式切换。
+- 空闲省电和降温策略。
+
+因此，这个仓库不是从零实现一套 M5Stack StopWatch BSP，而是在原 demo 固件基础上做桌面 AI 编程 companion 扩展。
+
 ## 1. 系统组成
 
 本项目分成两层：
@@ -12,6 +29,8 @@
 ## 2. Codex 页面布局
 
 圆屏按 `466 x 466` AMOLED 设计：
+
+![Codex StopWatch 实机运行效果](assets/codex-stopwatch-ui-actual.jpeg)
 
 - 顶部：当前时间，使用低调发光样式。
 - 左侧弧线：Codex 5 小时额度。

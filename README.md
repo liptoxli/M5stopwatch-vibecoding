@@ -1,8 +1,20 @@
 # M5stopwatch-vibecoding
 
-M5Stack StopWatch 的 vibe-coding companion 固件和 macOS 桥接应用。
+M5Stack StopWatch 的 Codex vibe-coding 模块、扩展固件和 macOS 桥接应用。
 
-这个项目把 M5Stack StopWatch 做成一个小型桌面状态设备：圆屏显示 Codex 额度、宠物状态、蓝牙和电量；实体按键可以绑定到 macOS 输入工具；macOS 桥接应用负责读取本机状态、同步按键配置，并把安全裁剪后的额度数据发到设备。
+![Codex StopWatch 实机运行效果](docs/assets/codex-stopwatch-ui-actual.jpeg)
+
+本项目是在 M5Stack StopWatch 原演示固件 / UserDemo 的基础上继续开发出来的 Codex vibe-coding 模块。它不是替代原厂基础工程，而是在原有 StopWatch 圆屏、按键、IMU、BLE、音频、LVGL 应用框架之上，新增 Codex 状态页、Pet 形象、额度展示、macOS 输入桥接和省电策略。
+
+这个扩展把 M5Stack StopWatch 做成一个小型桌面状态设备：圆屏显示 Codex 额度、宠物状态、蓝牙和电量；实体按键可以绑定到 macOS 输入工具；macOS 桥接应用负责读取本机状态、同步按键配置，并把安全裁剪后的额度数据发到设备。
+
+## 基础来源
+
+- 基础固件：M5Stack StopWatch 原演示固件 / UserDemo。
+- 扩展模块：本仓库新增的 Codex vibe-coding 页面、Pet 动画、BLE Bridge 配置协议、macOS Bridge、Typeless/微信输入法按键绑定、省电和状态栏逻辑。
+- 保留能力：原固件中的圆屏显示、按键、IMU、BLE、音频、LVGL 应用组织和部分示例应用。
+
+如果你已经熟悉原 M5Stack StopWatch demo，可以把本项目理解为“在原 demo 固件里新增一个 Codex 桌面 companion 应用，并配套一个 macOS 菜单栏桥接端”。
 
 ## 目录
 
