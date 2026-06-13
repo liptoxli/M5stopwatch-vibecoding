@@ -1,0 +1,26 @@
+{
+    "name": "MooncakeLog",
+    "version": "1.2.4",
+    "description": "基于 fmt 的简单 logger",
+    "keywords": "logging",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/Forairaaaaa/mooncake_log"
+    },
+    "authors": [
+        {
+            "name": "Forairaaaaa",
+            "email": "applesyqd@outlook.com",
+            "url": "https://github.com/Forairaaaaa"
+        }
+    ],
+    "license": "MIT",
+    "homepage": "https://github.com/Forairaaaaa/mooncake_log",
+    "dependencies": {},
+    "frameworks": "*",
+    "platforms": "*",
+    "build": {
+        "srcDir": ".",
+        "includeDir": "./src"
+    }
+}

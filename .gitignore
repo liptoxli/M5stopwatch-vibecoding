@@ -1,0 +1,13 @@
+.DS_Store
+build/
+build.*/
+managed_components/
+sdkconfig
+sdkconfig.old
+*.elf
+*.log
+.build/
+*.app/
+DerivedData/
+__pycache__/
+.venv/
