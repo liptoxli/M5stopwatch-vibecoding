@@ -37,8 +37,8 @@ constexpr bool kEnableAudioCodecInputPath = true;
 
 constexpr float kTiltFilterAlpha = 0.12f;
 constexpr float kTiltMaxOffset = 12.0f;
-constexpr float kShakeMotionFloor = 220.0f;
-constexpr float kShakeThreshold = 460.0f;
+constexpr float kShakeMotionFloor = 150.0f;
+constexpr float kShakeThreshold = 340.0f;
 constexpr uint32_t kShakeCooldownMs = 1500;
 
 constexpr uint32_t kBleKeyTapMs = 100;
