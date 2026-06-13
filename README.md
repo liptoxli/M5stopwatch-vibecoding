@@ -20,9 +20,10 @@ docs/                     功能说明、额度机制、宠物替换指南
 - Typeless 辅助：通过 macOS Accessibility 识别焦点、录音/处理中状态，并把状态同步到设备。
 - 电量状态栏：Codex 页面顶部下拉显示电量；20% 以下红色常驻，也可以手动上滑隐藏。
 - Pet：基于多帧 C 资产的 LVGL 图片动画，可替换为自己的形象。
-- 省电：屏幕变暗、轻度睡眠、深度睡眠分级处理；Wi-Fi 默认关闭，额度优先由 macOS BLE 推送。
+- 省电：1 分钟降亮度和降频，3 分钟关闭屏幕/LVGL 更新，10 分钟 deep sleep；Wi-Fi 默认关闭，额度优先由 macOS BLE 推送。
 
 完整功能说明见 [docs/FEATURES.md](docs/FEATURES.md)。
+省电策略见 [docs/POWER_SAVING.md](docs/POWER_SAVING.md)。
 
 ## 构建固件
 
