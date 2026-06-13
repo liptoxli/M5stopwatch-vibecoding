@@ -2009,7 +2009,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         switch SettingsStore.shared.settings.inputMode {
         case .typeless:
             typelessPrimaryDownAt = Date()
-            handleTypelessToggleRequest()
+            handleTypelessPrimaryDownStatus()
         case .wechatIME:
             handleWeChatOptionDown()
         }
@@ -2028,7 +2028,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
                 log("typeless primary up ignored; stop already handled held=\(String(format: "%.2f", heldSeconds))s")
                 return
             }
-            handleTypelessStopRequest(reason: "hold release")
+            handleTypelessStopStatus(reason: "hold release")
         case .wechatIME:
             handleWeChatOptionUp()
         }
@@ -2037,7 +2037,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private func handlePrimaryInputTap() {
         switch SettingsStore.shared.settings.inputMode {
         case .typeless:
-            handleTypelessToggleRequest()
+            handleTypelessPrimaryDownStatus()
         case .wechatIME:
             handleWeChatOptionTap()
         }
@@ -2069,202 +2069,109 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     }
 
     private func handleCodexEnterRequest() {
-        guard AXIsProcessTrusted() else {
-            sendBridgeLimited()
-            log("codex enter ignored: Accessibility unavailable.")
-            return
-        }
-
         if SettingsStore.shared.settings.inputMode == .wechatIME {
             if wechatOptionDown {
                 handleWeChatOptionUp()
             }
-            let binding = SettingsStore.shared.settings.rightKey
-            postKeyTap(binding)
-            log("wechat input confirm via mac helper key=\(binding.name)")
+            log("wechat input confirm observed; firmware sent HID")
             return
         }
 
         if processingUntil != nil || lastState?.phase == "processing" {
-            processingUntil = nil
-            processingStartedAt = nil
-            pendingCodexEnter = false
-            log("codex enter requested while Typeless processing; sending immediately.")
+            resetTypelessSessionTracking(clearFocus: true)
             write(VoiceState(active: false, phase: "idle", message: ""))
-            performCodexEnter(reason: "direct-processing")
+            log("codex enter observed while Typeless processing; cleared device processing state")
             return
         }
-        performCodexEnter(reason: "direct")
+        resetTypelessSessionTracking(clearFocus: false)
+        write(VoiceState(active: false, phase: "idle", message: ""))
+        log("codex enter observed; firmware sent HID")
     }
 
     private func performCodexEnter(reason: String) {
-        let restored: Bool
-        let targetDescription: String
-
-        if let target = lockedInputTarget {
-            restored = restoreInputFocus(target)
-            targetDescription = "\(target.focus.appName) role=\(target.role)"
-        } else if let snapshot = typelessFocusSnapshot {
-            restored = restoreFocus(snapshot)
-            targetDescription = "\(snapshot.appName) window=\(snapshot.windowTitle)"
-        } else {
-            log("codex enter ignored: no saved focus target.")
-            pendingCodexEnter = false
-            return
-        }
-
-        guard restored else {
-            log("codex enter ignored: saved focus target is unavailable.")
-            pendingCodexEnter = false
-            return
-        }
-
-        let binding = SettingsStore.shared.settings.rightKey
-        postKeyTap(binding)
         pendingCodexEnter = false
-        log("codex enter via mac helper key=\(binding.name) reason=\(reason) target=\(targetDescription)")
+        log("codex enter helper skipped reason=\(reason); firmware owns HID key")
     }
 
     private func handleShakeActionRequest() {
-        guard AXIsProcessTrusted() else {
-            sendBridgeLimited()
-            log("shake action ignored: Accessibility unavailable.")
-            return
+        if SettingsStore.shared.settings.shakeActionName == "Clear Input" {
+            resetTypelessSessionTracking(clearFocus: true)
+            write(VoiceState(active: false, phase: "idle", message: ""))
         }
-
-        switch SettingsStore.shared.settings.shakeActionName {
-        case "None":
-            log("shake action ignored: disabled.")
-        case "Escape":
-            postKeyTap(keyCode: UInt16(kVK_Escape))
-            log("shake action sent Escape.")
-        case "Return":
-            handleCodexEnterRequest()
-        case "Clear Input":
-            performClearInput()
-        default:
-            if let binding = SettingsStore.shared.settings.shakeKey {
-                postKeyTap(keyCode: binding.macKeyCode)
-                log("shake action sent key \(binding.name).")
-            } else {
-                performClearInput()
-            }
-        }
+        log("shake action observed; firmware sent HID action \(SettingsStore.shared.settings.shakeActionName)")
     }
 
     private func performClearInput() {
-        let restored: Bool
-        let targetDescription: String
+        resetTypelessSessionTracking(clearFocus: true)
+        write(VoiceState(active: false, phase: "idle", message: ""))
+        log("clear input status reset; firmware owns HID action")
+    }
 
-        if let target = lockedInputTarget {
-            restored = restoreInputFocus(target)
-            targetDescription = "\(target.focus.appName) role=\(target.role)"
-        } else if let current = currentInputFocusTarget() {
-            restored = restoreInputFocus(current)
-            targetDescription = "\(current.focus.appName) role=\(current.role)"
-        } else if let snapshot = typelessFocusSnapshot {
-            restored = restoreFocus(snapshot)
-            targetDescription = "\(snapshot.appName) window=\(snapshot.windowTitle)"
-        } else {
-            log("shake clear ignored: no input target.")
-            return
-        }
-
-        guard restored else {
-            log("shake clear ignored: input target unavailable.")
-            return
-        }
-
-        postKeyTap(keyCode: UInt16(kVK_ANSI_A), flags: .maskCommand)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            postKeyTap(keyCode: UInt16(kVK_Delete))
-        }
+    private func resetTypelessSessionTracking(clearFocus: Bool) {
+        typelessSessionActive = false
         processingUntil = nil
         processingStartedAt = nil
         pendingCodexEnter = false
-        write(VoiceState(active: false, phase: "idle", message: ""))
-        log("shake clear input via mac helper target=\(targetDescription)")
-    }
-
-    private func handleTypelessToggleRequest() {
-        guard AXIsProcessTrusted() else {
-            typelessSessionActive = false
+        typelessPrimaryDownAt = nil
+        if clearFocus {
             typelessFocusSnapshot = nil
             lockedInputTarget = nil
-            processingUntil = nil
-            processingStartedAt = nil
-            pendingCodexEnter = false
-            typelessPrimaryDownAt = nil
-            lastState = nil
-            sendBridgeLimited()
-            log("typeless event ignored: Accessibility unavailable.")
+        }
+    }
+
+    private func handleTypelessPrimaryDownStatus() {
+        if processingUntil != nil || lastState?.phase == "processing" {
+            resetTypelessSessionTracking(clearFocus: true)
+            write(VoiceState(active: false, phase: "idle", message: ""))
+            log("typeless primary observed while processing; cleared device processing state")
             return
         }
 
         let shouldStop = typelessSessionActive ||
-            lastState?.phase == "recording" ||
-            lastState?.phase == "processing" ||
-            processingUntil != nil
+            lastState?.phase == "recording"
 
         if !shouldStop && !isTypelessRunning() {
-            typelessSessionActive = false
-            typelessFocusSnapshot = nil
-            lockedInputTarget = nil
-            processingUntil = nil
-            processingStartedAt = nil
-            pendingCodexEnter = false
-            typelessPrimaryDownAt = nil
+            resetTypelessSessionTracking(clearFocus: true)
             write(VoiceState(active: false, phase: "idle", message: "Typeless 未运行"))
-            log("typeless start ignored: Typeless is not running; skipped \(SettingsStore.shared.settings.leftKey.name).")
+            log("typeless start status ignored: Typeless is not running.")
             return
         }
 
         if !shouldStop {
             let target = currentInputFocusTarget()
             let focus = target?.focus ?? frontmostFocusSnapshot()
-            guard let focus else {
-                log("typeless start ignored: no frontmost focus snapshot.")
-                return
-            }
             lockedInputTarget = target
             typelessFocusSnapshot = focus
-            let binding = SettingsStore.shared.settings.leftKey
-            postKeyTap(binding)
             typelessSessionActive = true
             write(VoiceState(active: true, phase: "recording", message: "正在录制中"))
             if let target {
-                log("typeless start via mac helper key=\(binding.name) target=\(target.focus.appName) role=\(target.role)")
+                log("typeless start observed target=\(target.focus.appName) role=\(target.role)")
+            } else if let focus {
+                log("typeless start observed target=\(focus.appName) window=\(focus.windowTitle)")
             } else {
-                log("typeless start via mac helper key=\(binding.name) target=\(focus.appName) window=\(focus.windowTitle)")
+                log("typeless start observed without focus snapshot")
             }
             return
         }
 
-        handleTypelessStopRequest(reason: "toggle")
+        handleTypelessStopStatus(reason: "toggle")
     }
 
-    private func handleTypelessStopRequest(reason: String) {
+    private func handleTypelessStopStatus(reason: String) {
         let canStop = typelessSessionActive ||
-            lastState?.phase == "recording" ||
-            lastState?.phase == "processing" ||
-            processingUntil != nil
+            lastState?.phase == "recording"
         guard canStop else {
-            log("typeless stop ignored: no active session reason=\(reason)")
+            log("typeless stop status ignored: no active session reason=\(reason)")
             return
         }
 
-        let target = lockedInputTarget
-        let snapshot = typelessFocusSnapshot
-        let binding = SettingsStore.shared.settings.leftKey
-        postKeyTap(binding)
-        restoreInputFocusAfterTypelessShortcut(target: target, snapshot: snapshot, reason: "stop")
         typelessSessionActive = false
         processingStartedAt = Date()
         processingUntil = Date().addingTimeInterval(typelessProcessingMaximumSeconds)
 
         write(VoiceState(active: true, phase: "processing", message: ""))
         scheduleProcessingFollowUps()
-        log("typeless stop via mac helper key=\(binding.name) reason=\(reason); focus restore scheduled")
+        log("typeless stop observed reason=\(reason)")
     }
 
     private func scheduleProcessingFollowUps() {

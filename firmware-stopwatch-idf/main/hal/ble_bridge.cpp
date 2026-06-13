@@ -206,19 +206,6 @@ void mark_companion_ready()
     g_companion_limited = false;
 }
 
-bool companion_ready_recent()
-{
-    if (!g_bridge_event_subscribed || g_companion_limited || g_companion_ready_tick == 0) {
-        return false;
-    }
-    return xTaskGetTickCount() - g_companion_ready_tick < pdMS_TO_TICKS(codex_config::kBleCompanionReadyWindowMs);
-}
-
-bool companion_can_handle(bool event_ok)
-{
-    return event_ok && g_bridge_event_subscribed && !g_companion_limited && companion_ready_recent();
-}
-
 std::string lowercase(std::string value)
 {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
@@ -1321,75 +1308,55 @@ void send_typeless_option(ButtonAction action)
 {
     load_host_input_config();
     if (action == ButtonAction::Down) {
-        const bool event_ok = notify_bridge_event("input_primary_down");
+        notify_bridge_event("input_primary_down");
         if (g_host_input_mode == HostInputMode::WechatIme) {
             mclog::tagInfo(kTag, "Primary input down via HID binding");
             set_host_status("WeChat input down");
-            send_hid_binding_down(g_primary_binding);
-        } else if (!companion_can_handle(event_ok)) {
-            mclog::tagInfo(kTag, "Primary input down via HID fallback");
-            set_host_status("Bridge fallback key");
-            send_hid_binding_down(g_primary_binding);
         } else {
-            mclog::tagInfo(kTag, "Primary input down via companion");
+            mclog::tagInfo(kTag, "Primary input down via HID binding");
+            set_host_status("Typeless input down");
         }
+        send_hid_binding_down(g_primary_binding);
         return;
     }
 
     if (action == ButtonAction::Tap) {
-        const bool event_ok = notify_bridge_event("input_primary_tap");
+        notify_bridge_event("input_primary_tap");
         if (g_host_input_mode == HostInputMode::WechatIme) {
             mclog::tagInfo(kTag, "Primary input tap via HID binding");
             set_host_status("WeChat input tap");
-            send_hid_binding_tap(g_primary_binding);
-            return;
+        } else {
+            mclog::tagInfo(kTag, "Primary input tap via HID binding");
+            set_host_status("Typeless input tap");
         }
-        if (companion_can_handle(event_ok)) {
-            mclog::tagInfo(kTag, "Primary input tap via companion");
-            set_host_status("Input request sent");
-            return;
-        }
-        mclog::tagInfo(kTag, "Primary input tap via HID fallback");
-        set_host_status("Bridge fallback key");
         send_hid_binding_tap(g_primary_binding);
         return;
     }
 
-    const bool event_ok = notify_bridge_event("input_primary_up");
+    notify_bridge_event("input_primary_up");
     if (g_host_input_mode == HostInputMode::WechatIme) {
         mclog::tagInfo(kTag, "Primary input up via HID binding release");
         set_host_status("WeChat input up");
-        release_keyboard();
-    } else if (!companion_can_handle(event_ok)) {
-        mclog::tagInfo(kTag, "Primary input up via HID fallback release");
-        set_host_status("Bridge fallback key");
-        release_keyboard();
     } else {
-        mclog::tagInfo(kTag, "Primary input up via companion");
+        mclog::tagInfo(kTag, "Primary input up via HID binding release");
+        set_host_status("Typeless input up");
     }
+    release_keyboard();
 }
 
 void send_codex_enter()
 {
     load_host_input_config();
-    const bool event_ok = notify_bridge_event("input_confirm_tap");
-    if (companion_can_handle(event_ok)) {
-        set_host_status("Input confirm sent");
-        return;
-    }
-    set_host_status("Bridge fallback key");
+    notify_bridge_event("input_confirm_tap");
+    set_host_status("Input confirm key");
     send_hid_binding_tap(g_confirm_binding);
 }
 
 void send_shake_action()
 {
     load_host_input_config();
-    const bool event_ok = notify_bridge_event("shake_action");
-    if (companion_can_handle(event_ok)) {
-        set_host_status("Shake request sent");
-        return;
-    }
-    mclog::tagInfo(kTag, "Shake action via HID fallback: {}", g_shake_action);
+    notify_bridge_event("shake_action");
+    mclog::tagInfo(kTag, "Shake action via HID: {}", g_shake_action);
     execute_shake_hid_action();
 }
 
