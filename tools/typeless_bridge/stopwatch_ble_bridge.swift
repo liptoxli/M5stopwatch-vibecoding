@@ -21,6 +21,8 @@ private let logFileURL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Logs/stopwatch-ble-bridge.log")
 private let bridgeSettingsChangedNotification = Notification.Name("StopWatchBleBridgeSettingsChanged")
 private let typelessHoldToStopSeconds: TimeInterval = 0.35
+private let typelessProcessingMinimumSeconds: TimeInterval = 2.2
+private let typelessProcessingMaximumSeconds: TimeInterval = 4.0
 
 private func isSupportedDeviceName(_ name: String?) -> Bool {
     guard let name else { return false }
@@ -2258,7 +2260,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         restoreInputFocusAfterTypelessShortcut(target: target, snapshot: snapshot, reason: "stop")
         typelessSessionActive = false
         processingStartedAt = Date()
-        processingUntil = Date().addingTimeInterval(3.0)
+        processingUntil = Date().addingTimeInterval(typelessProcessingMaximumSeconds)
 
         write(VoiceState(active: true, phase: "processing", message: ""))
         scheduleProcessingFollowUps()
@@ -2266,12 +2268,12 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     }
 
     private func scheduleProcessingFollowUps() {
-        for delay in [0.35, 0.8, 1.4, 2.2] {
+        for delay in [0.35, 0.9, 1.6, 2.3] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 self?.writeCurrentState(force: false)
             }
         }
-        for delay in [3.1, 4.1] {
+        for delay in [3.2, 4.2] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 self?.writeCurrentState(force: true)
             }
@@ -2473,7 +2475,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         }
         if let until = processingUntil {
             let detected = currentTypelessState()
-            let minProcessingUntil = processingStartedAt?.addingTimeInterval(0.7) ?? Date.distantPast
+            let minProcessingUntil = processingStartedAt?.addingTimeInterval(typelessProcessingMinimumSeconds) ?? Date.distantPast
             if Date() >= until {
                 processingUntil = nil
                 processingStartedAt = nil
@@ -2482,7 +2484,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
                 }
                 return VoiceState(active: false, phase: "idle", message: "")
             }
-            if detected.phase == "idle" && (detected.message != "Typeless 待机" || Date() >= minProcessingUntil) {
+            if detected.phase == "idle" && Date() >= minProcessingUntil {
                 processingUntil = nil
                 processingStartedAt = nil
                 if detected.message == "Typeless 待机" {
