@@ -21,7 +21,8 @@ private let logFileURL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Logs/stopwatch-ble-bridge.log")
 private let bridgeSettingsChangedNotification = Notification.Name("StopWatchBleBridgeSettingsChanged")
 private let typelessHoldToStopSeconds: TimeInterval = 0.35
-private let typelessProcessingMaximumSeconds: TimeInterval = 4.0
+private let typelessProcessingIdleGraceSeconds: TimeInterval = 1.2
+private let typelessProcessingMaximumSeconds: TimeInterval = 2.8
 
 private func isSupportedDeviceName(_ name: String?) -> Bool {
     guard let name else { return false }
@@ -2474,6 +2475,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         }
         if let until = processingUntil {
             let detected = currentTypelessState()
+            let idleGraceUntil = processingStartedAt?.addingTimeInterval(typelessProcessingIdleGraceSeconds) ?? Date.distantPast
             if Date() >= until {
                 processingUntil = nil
                 processingStartedAt = nil
@@ -2485,6 +2487,14 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             if detected.phase == "idle" && detected.message == "Typeless sent" {
                 processingUntil = nil
                 processingStartedAt = nil
+                return detected
+            }
+            if detected.phase == "idle" && Date() >= idleGraceUntil {
+                processingUntil = nil
+                processingStartedAt = nil
+                if detected.message == "Typeless 待机" {
+                    return VoiceState(active: false, phase: "idle", message: "")
+                }
                 return detected
             }
             if detected.phase == "recording" {
