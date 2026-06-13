@@ -1619,8 +1619,6 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private var pendingCodexEnter = false
     private var wechatOptionDown = false
     private var wechatHeldBinding: KeyBinding?
-    private var suppressLegacyPrimaryEventsUntil = Date.distantPast
-    private var suppressLegacyConfirmEventsUntil = Date.distantPast
     private var lastRediscoverAt = Date.distantPast
     private var lastBridgeConfigPayload: String?
     private var statusWriteQueue: [(payload: String, label: String)] = []
@@ -1845,45 +1843,17 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private func handleDeviceEvent(_ text: String) {
         switch text {
         case "input_primary_down":
-            suppressLegacyPrimaryEventsUntil = Date().addingTimeInterval(0.25)
             handlePrimaryInputDown()
         case "input_primary_up":
-            suppressLegacyPrimaryEventsUntil = Date().addingTimeInterval(0.25)
             handlePrimaryInputUp()
         case "input_primary_tap":
-            suppressLegacyPrimaryEventsUntil = Date().addingTimeInterval(0.25)
             handlePrimaryInputTap()
         case "input_confirm_tap":
-            suppressLegacyConfirmEventsUntil = Date().addingTimeInterval(0.25)
-            handleCodexEnterRequest()
-        case "typeless_option_tap_host":
-            guard Date() >= suppressLegacyPrimaryEventsUntil else {
-                log("legacy typeless tap ignored after generic input event")
-                return
-            }
-            handlePrimaryInputTap()
-        case "typeless_option_down":
-            guard Date() >= suppressLegacyPrimaryEventsUntil else {
-                log("legacy typeless down ignored after generic input event")
-                return
-            }
-            handlePrimaryInputDown()
-        case "typeless_option_up":
-            guard Date() >= suppressLegacyPrimaryEventsUntil else {
-                log("legacy typeless up ignored after generic input event")
-                return
-            }
-            handlePrimaryInputUp()
-        case "codex_enter":
-            guard Date() >= suppressLegacyConfirmEventsUntil else {
-                log("legacy codex enter ignored after generic input event")
-                return
-            }
             handleCodexEnterRequest()
         case "shake_action":
             handleShakeActionRequest()
-        case "typeless_option_tap":
-            log("legacy typeless event ignored; firmware owns HID key")
+        case "typeless_option_tap_host", "typeless_option_down", "typeless_option_up", "typeless_option_tap", "codex_enter":
+            log("legacy bridge event ignored after input protocol cleanup: \(text)")
         default:
             return
         }

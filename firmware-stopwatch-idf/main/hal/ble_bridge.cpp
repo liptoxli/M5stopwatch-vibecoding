@@ -1315,9 +1315,7 @@ void send_typeless_option(ButtonAction action)
 {
     load_host_input_config();
     if (action == ButtonAction::Down) {
-        const bool generic_event_ok = notify_bridge_event("input_primary_down");
-        const bool legacy_event_ok = notify_bridge_event("typeless_option_down");
-        const bool event_ok = generic_event_ok || legacy_event_ok;
+        const bool event_ok = notify_bridge_event("input_primary_down");
         if (g_host_input_mode == HostInputMode::WechatIme) {
             mclog::tagInfo(kTag, "Primary input down via HID binding");
             set_host_status("WeChat input down");
@@ -1333,9 +1331,7 @@ void send_typeless_option(ButtonAction action)
     }
 
     if (action == ButtonAction::Tap) {
-        const bool generic_event_ok = notify_bridge_event("input_primary_tap");
-        const bool legacy_event_ok = notify_bridge_event("typeless_option_tap_host");
-        const bool event_ok = generic_event_ok || legacy_event_ok;
+        const bool event_ok = notify_bridge_event("input_primary_tap");
         if (g_host_input_mode == HostInputMode::WechatIme) {
             mclog::tagInfo(kTag, "Primary input tap via HID binding");
             set_host_status("WeChat input tap");
@@ -1353,9 +1349,7 @@ void send_typeless_option(ButtonAction action)
         return;
     }
 
-    const bool generic_event_ok = notify_bridge_event("input_primary_up");
-    const bool legacy_event_ok = notify_bridge_event("typeless_option_up");
-    const bool event_ok = generic_event_ok || legacy_event_ok;
+    const bool event_ok = notify_bridge_event("input_primary_up");
     if (g_host_input_mode == HostInputMode::WechatIme) {
         mclog::tagInfo(kTag, "Primary input up via HID binding release");
         set_host_status("WeChat input up");
@@ -1372,9 +1366,7 @@ void send_typeless_option(ButtonAction action)
 void send_codex_enter()
 {
     load_host_input_config();
-    const bool generic_event_ok = notify_bridge_event("input_confirm_tap");
-    const bool legacy_event_ok = notify_bridge_event("codex_enter");
-    const bool event_ok = generic_event_ok || legacy_event_ok;
+    const bool event_ok = notify_bridge_event("input_confirm_tap");
     if (companion_can_handle(event_ok)) {
         set_host_status("Input confirm sent");
         return;
