@@ -5,11 +5,11 @@ StopWatch BLE Bridge is the macOS companion app for the M5 StopWatch Codex firmw
 It provides four local functions:
 
 - Connect to `M5Codex-*` over Bluetooth.
-- Forward device button events to configurable macOS keyboard events.
-- Optionally sync Typeless recording/processing state back to the device.
+- Sync configurable key bindings and input mode to firmware.
+- Optionally observe Typeless recording/processing state and sync it back to the device.
 - Optionally read local Codex auth and push quota snapshots to the device.
 
-No account credentials are bundled in the app. Codex quota sync is optional and reads the current user's local `~/.codex/auth.json` only when enabled.
+Real keyboard input is sent by the device firmware through BLE HID. The bridge app does not inject Typeless, WeChat IME, Enter, or Clear Input keystrokes into macOS. No account credentials are bundled in the app. Codex quota sync is optional and reads the current user's local `~/.codex/auth.json` only when enabled.
 
 ## User Setup
 
@@ -43,7 +43,7 @@ No account credentials are bundled in the app. Codex quota sync is optional and 
 - Quota refresh: `300` seconds
 - LaunchAgent: start at login, do not force-restart after user quits
 
-F19 is preferred because it is a normal HID key rather than a pure modifier. This makes bridge fallback behavior consistent: if the app is down, the device can still send the same key through BLE HID. Users can map F19 to Typeless, Tencent Input, or another local tool.
+F19 is preferred because it is a normal HID key rather than a pure modifier. The device sends it directly through BLE HID, so behavior stays consistent even if the bridge app is not running. Users can map F19 to Typeless, Tencent Input, WeChat IME, or another local voice-input tool.
 
 Available key bindings in the menu app:
 
@@ -64,9 +64,9 @@ The menu bar app shows:
 
 ## Optional Typeless Integration
 
-The bridge works without Typeless. In that mode, it only sends the configured keyboard keys and keeps the device usable through BLE HID fallback.
+The bridge works without Typeless. In that mode, it only syncs configuration and quota/status data; the device remains usable because firmware sends configured keyboard keys through BLE HID.
 
-When Typeless is installed and Accessibility permission is granted, the bridge can also detect recording / processing / sent states, restore the original app/window or input field, and push a simple voice-state animation to the device. If `Optional: sync Typeless shortcut to left key` is enabled, the app writes the selected left key into Typeless local settings and creates a backup:
+When Typeless is installed and Accessibility permission is granted, the bridge can detect recording / processing / sent states and push a simple voice-state animation to the device. If `Optional: sync Typeless shortcut to left key` is enabled, the app writes the selected left key into Typeless local settings and creates a backup:
 
 ```text
 ~/Library/Application Support/Typeless/app-settings.json.stopwatch-bridge.bak
@@ -74,13 +74,11 @@ When Typeless is installed and Accessibility permission is granted, the bridge c
 
 For other input apps, leave Typeless shortcut sync disabled and configure shortcuts inside that app manually.
 
-### Focus restore and queued Enter
+### Input boundary
 
-The left key toggles voice input. Before starting, the bridge records the current input field when possible; if the field is not a standard macOS Accessibility text field, it records the current app and window instead. On stop, it restores that target before stopping Typeless.
+The left key toggles voice input and the right key confirms/sends through firmware BLE HID. The bridge app observes device events only to update status on the StopWatch screen. It does not restore focus, queue Enter, or simulate keyboard events on macOS.
 
-If the right key is pressed while Typeless is still processing, the bridge queues the Enter action and sends it after Typeless returns to idle plus a short delay. This avoids sending Enter before the recognized text has been inserted.
-
-If Accessibility is unavailable, the app reports `bridge_limited` to the device. The device stays connected but falls back to its own BLE HID keyboard events.
+If Accessibility is unavailable, the app reports `bridge_limited` to the device. The device still sends its configured BLE HID keys, but Typeless state detection is limited.
 
 ## Codex Quota Auth
 
@@ -133,8 +131,8 @@ The release package contains only the app bundle. It does not install the Launch
 
 The menu bar app can switch the primary device button between `Typeless` and `WeChat IME`.
 The Mac helper syncs the selected mode plus primary, confirm, and shake bindings to firmware.
-Firmware persists the last synced bindings and can keep sending basic BLE HID keys without the helper; helper-only features such as focus restore, Typeless state detection, and quota sync require the app.
-In `WeChat IME` mode, primary down/up holds and releases Right Option from firmware HID, and confirm sends the configured right key.
+Firmware persists the last synced bindings and sends BLE HID keys directly without needing the helper; helper-only features are Typeless state detection, quota sync, and configuration UI.
+In `WeChat IME` mode, primary down/up holds and releases Right Option from firmware HID by default, and confirm sends the configured right key.
 The default shake fallback is `Command+A` followed by `Backspace` for clearing the current input.
 
 ## Install
@@ -204,11 +202,11 @@ If the log contains:
 Accessibility unavailable
 ```
 
-the bridge can still keep the device connected, but input focus restore, Typeless state detection, and queued Enter require Accessibility permission. Use the menu item `Open Accessibility Settings`, enable `StopWatch BLE Bridge`, then restart the bridge app.
+the bridge can still keep the device connected and firmware HID input continues to work, but Typeless state detection requires Accessibility permission. Use the menu item `Open Accessibility Settings`, enable `StopWatch BLE Bridge`, then restart the bridge app.
 
-### Enter is sent too early after voice recognition
+### Enter timing after voice recognition
 
-The bridge queues Enter while Typeless is processing and sends it after Typeless returns to idle plus a short delay. This avoids pressing Enter before the recognized text is inserted.
+Enter is sent by the device firmware when the right key is pressed. If the input app has not finished inserting recognized text, wait for the device processing indicator to clear before pressing confirm.
 
 ## Developer Notes
 
