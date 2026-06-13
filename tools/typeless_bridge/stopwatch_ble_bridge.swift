@@ -1623,6 +1623,8 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private var suppressLegacyConfirmEventsUntil = Date.distantPast
     private var lastRediscoverAt = Date.distantPast
     private var lastBridgeConfigPayload: String?
+    private var statusWriteQueue: [(payload: String, label: String)] = []
+    private var statusWriteInFlight = false
     private var didPromptAccessibility = false
 
     init(options: Options) {
@@ -1828,6 +1830,18 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         handleDeviceEvent(text)
     }
 
+    func peripheral(_ peripheral: CBPeripheral,
+                    didWriteValueFor characteristic: CBCharacteristic,
+                    error: Error?) {
+        guard characteristic.uuid == statusUUID else { return }
+        statusWriteInFlight = false
+        if let error {
+            BridgeStatusCenter.shared.lastError = error.localizedDescription
+            log("status write failed: \(error.localizedDescription)")
+        }
+        sendNextStatusWrite()
+    }
+
     private func handleDeviceEvent(_ text: String) {
         switch text {
         case "input_primary_down":
@@ -1889,6 +1903,8 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         eventNotifyEnabled = false
         lastRediscoverAt = Date.distantPast
         lastBridgeConfigPayload = nil
+        statusWriteQueue.removeAll()
+        statusWriteInFlight = false
     }
 
     private func startHealthLoop() {
@@ -1935,18 +1951,16 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     }
 
     private func sendBridgeHeartbeat(force: Bool = false) {
-        guard let peripheral,
-              let characteristic = statusCharacteristic,
+        guard statusCharacteristic != nil,
               let payload = Optional(bridgeReadyPayload()),
-              let data = payload.data(using: .utf8) else {
+              payload.data(using: .utf8) != nil else {
             return
         }
         guard force || payload != lastBridgeConfigPayload else {
             return
         }
-        let writeType: CBCharacteristicWriteType = characteristic.properties.contains(.write) ? .withResponse : .withoutResponse
-        peripheral.writeValue(data, for: characteristic, type: writeType)
         lastBridgeConfigPayload = payload
+        queueStatusWrite(payload, label: "config")
         log("bridge config synced: \(payload)")
     }
 
@@ -1976,13 +1990,45 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     }
 
     private func sendBridgeLimited() {
-        guard let peripheral,
-              let characteristic = statusCharacteristic,
-              let data = "{\"type\":\"bridge_limited\",\"version\":1,\"helper\":\"limited\"}".data(using: .utf8) else {
+        let payload = "{\"type\":\"bridge_limited\",\"version\":1,\"helper\":\"limited\"}"
+        guard statusCharacteristic != nil,
+              payload.data(using: .utf8) != nil else {
             return
         }
-        let writeType: CBCharacteristicWriteType = characteristic.properties.contains(.write) ? .withResponse : .withoutResponse
-        peripheral.writeValue(data, for: characteristic, type: writeType)
+        queueStatusWrite(payload, label: "limited")
+    }
+
+    private func queueStatusWrite(_ payload: String, label: String) {
+        guard payload.data(using: .utf8) != nil else { return }
+        if label.hasPrefix("voice ") {
+            statusWriteQueue.removeAll { $0.label.hasPrefix("voice ") }
+        }
+        statusWriteQueue.append((payload: payload, label: label))
+        sendNextStatusWrite()
+    }
+
+    private func sendNextStatusWrite() {
+        guard !statusWriteInFlight,
+              let peripheral,
+              let characteristic = statusCharacteristic,
+              !statusWriteQueue.isEmpty else {
+            return
+        }
+
+        let item = statusWriteQueue.removeFirst()
+        guard let data = item.payload.data(using: .utf8) else {
+            sendNextStatusWrite()
+            return
+        }
+
+        if characteristic.properties.contains(.write) {
+            statusWriteInFlight = true
+            peripheral.writeValue(data, for: characteristic, type: .withResponse)
+        } else {
+            peripheral.writeValue(data, for: characteristic, type: .withoutResponse)
+            log("status write sent without response: \(item.label)")
+            sendNextStatusWrite()
+        }
     }
 
     private func handlePrimaryInputDown() {
@@ -2464,13 +2510,11 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     }
 
     private func write(_ state: VoiceState) {
-        guard let peripheral,
-              let characteristic = statusCharacteristic,
-              let data = state.payload.data(using: .utf8) else {
+        guard statusCharacteristic != nil,
+              state.payload.data(using: .utf8) != nil else {
             return
         }
-        let writeType: CBCharacteristicWriteType = characteristic.properties.contains(.write) ? .withResponse : .withoutResponse
-        peripheral.writeValue(data, for: characteristic, type: writeType)
+        queueStatusWrite(state.payload, label: "voice \(state.phase)")
         lastState = state
         BridgeStatusCenter.shared.typelessStatus = state.message.isEmpty ? state.phase : state.message
         log("state \(state.phase) active=\(state.active) message=\(state.message)")

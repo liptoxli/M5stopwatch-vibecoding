@@ -65,7 +65,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<'INFO_PLIST'
 </plist>
 INFO_PLIST
 
-if [[ "${SIGN_BRIDGE_APP:-0}" == "1" ]]; then
+if [[ "${SIGN_BRIDGE_APP:-1}" == "1" ]]; then
+  /usr/bin/xattr -cr "$APP_DIR" 2>/dev/null || true
   codesign --force --deep --sign - "$APP_DIR" >/dev/null
 else
   echo "Skipping ad-hoc codesign. Set SIGN_BRIDGE_APP=1 to sign the app bundle."
