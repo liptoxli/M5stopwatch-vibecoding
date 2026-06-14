@@ -36,6 +36,12 @@ Real keyboard input is sent by the device firmware through BLE HID. The bridge a
 
 7. Configure the same left/right shortcuts in your input app if needed. This can be Typeless, Tencent Input, or any other app that accepts normal keyboard shortcuts.
 
+## Multi-Mac Pairing
+
+The firmware stores up to three bonded macOS hosts. For a Mac mini and iMac in different locations, pair the same `M5Codex-XX` device once on each Mac. After both bonds are stored, the device should reconnect to the nearby paired Mac without deleting and re-pairing Bluetooth.
+
+Only one Mac can be connected at a time. If two paired Macs are in the same room, quit the bridge app or turn off Bluetooth on the Mac that should not own the device.
+
 ## Recommended Defaults
 
 - Left action: `F19`

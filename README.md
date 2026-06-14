@@ -47,6 +47,7 @@ docs/                     功能说明、额度机制、宠物替换指南
 - 电量状态栏：Codex 页面顶部下拉显示电量；20% 以下红色常驻，也可以手动上滑隐藏。
 - Pet：基于多帧 C 资产的 LVGL 图片动画，可替换为自己的形象。
 - 省电：1 分钟降亮度和降频，3 分钟关闭屏幕/LVGL 更新，10 分钟 deep sleep；Wi-Fi 默认关闭，额度优先由 macOS BLE 推送。
+- 供电策略：插着 USB 时不会进入 deep sleep，只会保持轻度/普通省电状态；拔掉 USB 且持续空闲后才允许 deep sleep。
 
 完整功能说明见 [docs/FEATURES.md](docs/FEATURES.md)。
 省电策略见 [docs/POWER_SAVING.md](docs/POWER_SAVING.md)。

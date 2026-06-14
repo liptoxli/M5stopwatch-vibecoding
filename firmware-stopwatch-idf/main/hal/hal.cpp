@@ -200,6 +200,9 @@ void Hal::updateActivityMonitor()
 
     const auto idle_ms = now - _activity_last_ms;
     if (idle_ms >= _activity_deep_sleep_timeout_ms) {
+        if (isBatteryCharging(false)) {
+            return;
+        }
         enterDeepSleep();
         return;
     }
