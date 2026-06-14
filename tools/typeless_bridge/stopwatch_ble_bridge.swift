@@ -20,7 +20,7 @@ private let configFileURL = supportDirectoryURL.appendingPathComponent("config.j
 private let logFileURL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Logs/stopwatch-ble-bridge.log")
 private let bridgeSettingsChangedNotification = Notification.Name("StopWatchBleBridgeSettingsChanged")
-private let typelessHoldToStopSeconds: TimeInterval = 0.35
+private let typelessPrimaryDownDebounceSeconds: TimeInterval = 0.35
 private let typelessProcessingIdleGraceSeconds: TimeInterval = 1.2
 private let typelessProcessingMaximumSeconds: TimeInterval = 2.8
 
@@ -2008,7 +2008,13 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private func handlePrimaryInputDown() {
         switch SettingsStore.shared.settings.inputMode {
         case .typeless:
-            typelessPrimaryDownAt = Date()
+            let now = Date()
+            if let lastDown = typelessPrimaryDownAt,
+               now.timeIntervalSince(lastDown) < typelessPrimaryDownDebounceSeconds {
+                log("typeless primary down ignored; duplicate event debounce")
+                return
+            }
+            typelessPrimaryDownAt = now
             handleTypelessPrimaryDownStatus()
         case .wechatIME:
             handleWeChatOptionDown()
@@ -2018,17 +2024,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private func handlePrimaryInputUp() {
         switch SettingsStore.shared.settings.inputMode {
         case .typeless:
-            let heldSeconds = typelessPrimaryDownAt.map { Date().timeIntervalSince($0) } ?? 0
-            typelessPrimaryDownAt = nil
-            guard heldSeconds >= typelessHoldToStopSeconds else {
-                log("typeless primary up ignored; short tap uses toggle held=\(String(format: "%.2f", heldSeconds))s")
-                return
-            }
-            guard typelessSessionActive || lastState?.phase == "recording" else {
-                log("typeless primary up ignored; stop already handled held=\(String(format: "%.2f", heldSeconds))s")
-                return
-            }
-            handleTypelessStopStatus(reason: "hold release")
+            log("typeless primary up observed; firmware owns HID release")
         case .wechatIME:
             handleWeChatOptionUp()
         }
