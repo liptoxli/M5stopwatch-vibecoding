@@ -564,7 +564,6 @@ void apply_voice_payload(const std::string& payload)
     mark_companion_ready();
     if (contains_any(lower, {"\"input_mode\":", "\"primary_key\":", "\"confirm_key\":", "\"shake_action\":"})) {
         ESP_LOGI(kTag, "bridge config payload: %s", payload.c_str());
-        release_keyboard();
         if (contains_any(lower, {"\"input_mode\":\"wechat_ime\"", "\"input_mode\":\"wechat\"", "\"mode\":\"wechat_ime\""})) {
             apply_default_bindings_for_mode(HostInputMode::WechatIme);
             set_host_status("WeChat IME mode");
@@ -1317,19 +1316,6 @@ void send_typeless_option(ButtonAction action)
             set_host_status("Typeless input down");
         }
         send_hid_binding_down(g_primary_binding);
-        return;
-    }
-
-    if (action == ButtonAction::Tap) {
-        notify_bridge_event("input_primary_tap");
-        if (g_host_input_mode == HostInputMode::WechatIme) {
-            mclog::tagInfo(kTag, "Primary input tap via HID binding");
-            set_host_status("WeChat input tap");
-        } else {
-            mclog::tagInfo(kTag, "Primary input tap via HID binding");
-            set_host_status("Typeless input tap");
-        }
-        send_hid_binding_tap(g_primary_binding);
         return;
     }
 

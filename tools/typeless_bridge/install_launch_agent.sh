@@ -12,6 +12,7 @@ PLIST="$HOME/Library/LaunchAgents/dev.vibecoding.stopwatch-ble-bridge.plist"
 WATCHDOG_PLIST="$HOME/Library/LaunchAgents/dev.vibecoding.stopwatch-ble-bridge.watchdog.plist"
 WATCHDOG="$HOME/Library/Application Support/M5StopWatch/StopWatchBleBridge/watchdog.sh"
 LOG="$HOME/Library/Logs/stopwatch-ble-bridge.log"
+SIGN_IDENTITY="${BRIDGE_CODESIGN_IDENTITY:-M5StopWatch Local Code Signing}"
 
 "$SCRIPT_DIR/build_stopwatch_ble_bridge.sh" >/dev/null
 launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
@@ -65,11 +66,16 @@ cat > "$CONTENTS_DIR/Info.plist" <<'INFO_PLIST'
 </plist>
 INFO_PLIST
 
-if [[ "${SIGN_BRIDGE_APP:-1}" == "1" ]]; then
+if security find-identity -v -p codesigning | grep -Fq "$SIGN_IDENTITY"; then
+  /usr/bin/xattr -cr "$APP_DIR" 2>/dev/null || true
+  codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_DIR" >/dev/null
+  echo "Signed app with stable local identity: $SIGN_IDENTITY"
+elif [[ "${SIGN_BRIDGE_APP:-0}" == "1" ]]; then
   /usr/bin/xattr -cr "$APP_DIR" 2>/dev/null || true
   codesign --force --deep --sign - "$APP_DIR" >/dev/null
+  echo "Signed app with ad-hoc identity. Accessibility permission may need to be re-approved after each build."
 else
-  echo "Skipping ad-hoc codesign. Set SIGN_BRIDGE_APP=1 to sign the app bundle."
+  echo "Skipping codesign. Run tools/typeless_bridge/create_local_codesign_identity.sh once for stable Accessibility permission across updates."
 fi
 
 cat > "$PLIST" <<PLIST

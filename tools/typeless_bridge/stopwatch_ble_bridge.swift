@@ -21,6 +21,7 @@ private let logFileURL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Logs/stopwatch-ble-bridge.log")
 private let bridgeSettingsChangedNotification = Notification.Name("StopWatchBleBridgeSettingsChanged")
 private let typelessPrimaryDownDebounceSeconds: TimeInterval = 0.35
+private let typelessStartIdleGraceSeconds: TimeInterval = 1.0
 private let typelessProcessingIdleGraceSeconds: TimeInterval = 1.2
 private let typelessProcessingMaximumSeconds: TimeInterval = 2.8
 
@@ -496,70 +497,6 @@ private func requestAccessibilityAccess() -> Bool {
     return AXIsProcessTrustedWithOptions(options)
 }
 
-private func postKeyTap(_ binding: KeyBinding) {
-    let source = CGEventSource(stateID: .hidSystemState)
-    let keyDown = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(binding.macKeyCode), keyDown: true)
-    keyDown?.post(tap: .cghidEventTap)
-
-    let keyUp = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(binding.macKeyCode), keyDown: false)
-    keyUp?.post(tap: .cghidEventTap)
-}
-
-private func postKeyTap(keyCode: UInt16, flags: CGEventFlags = []) {
-    let source = CGEventSource(stateID: .hidSystemState)
-    let keyDown = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(keyCode), keyDown: true)
-    keyDown?.flags = flags
-    keyDown?.post(tap: .cghidEventTap)
-
-    let keyUp = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(keyCode), keyDown: false)
-    keyUp?.flags = flags
-    keyUp?.post(tap: .cghidEventTap)
-}
-
-private func postKeyDown(keyCode: UInt16, flags: CGEventFlags = []) {
-    let source = CGEventSource(stateID: .hidSystemState)
-    let event = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(keyCode), keyDown: true)
-    event?.flags = flags
-    event?.post(tap: .cghidEventTap)
-}
-
-private func postKeyUp(keyCode: UInt16, flags: CGEventFlags = []) {
-    let source = CGEventSource(stateID: .hidSystemState)
-    let event = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(keyCode), keyDown: false)
-    event?.flags = flags
-    event?.post(tap: .cghidEventTap)
-}
-
-@discardableResult
-private func postRightOption(isDown: Bool) -> Bool {
-    let event = CGEvent(keyboardEventSource: nil,
-                        virtualKey: CGKeyCode(kVK_RightOption),
-                        keyDown: isDown)
-    guard let event else { return false }
-    event.flags = isDown ? .maskAlternate : []
-    event.post(tap: .cghidEventTap)
-    return true
-}
-
-@discardableResult
-private func postKeyDown(_ binding: KeyBinding) -> Bool {
-    if binding.name == "Right Option" {
-        return postRightOption(isDown: true)
-    }
-    let flags: CGEventFlags = binding.name == "Right Option" ? .maskAlternate : []
-    postKeyDown(keyCode: binding.macKeyCode, flags: flags)
-    return true
-}
-
-@discardableResult
-private func postKeyUp(_ binding: KeyBinding) -> Bool {
-    if binding.name == "Right Option" {
-        return postRightOption(isDown: false)
-    }
-    postKeyUp(keyCode: binding.macKeyCode, flags: [])
-    return true
-}
-
 private func hidReportBinding(_ binding: KeyBinding) -> (modifier: UInt8, keycode: UInt8) {
     binding.name == "Right Option" ? (0x40, binding.hidKeyCode) : (0, binding.hidKeyCode)
 }
@@ -834,73 +771,6 @@ private func currentInputFocusTarget() -> InputFocusTarget? {
     let role = stringValue(copyAttribute(input, kAXRoleAttribute as CFString))
     let title = stringValue(copyAttribute(input, kAXTitleAttribute as CFString))
     return InputFocusTarget(focus: focus, element: input, role: role, title: title)
-}
-
-private func restoreFocus(_ snapshot: FocusSnapshot?) -> Bool {
-    guard let snapshot else {
-        return false
-    }
-
-    let candidates = NSWorkspace.shared.runningApplications.filter {
-        if let bundleIdentifier = snapshot.bundleIdentifier, $0.bundleIdentifier == bundleIdentifier {
-            return true
-        }
-        return $0.processIdentifier == snapshot.processIdentifier
-    }
-    guard let app = candidates.first else {
-        return false
-    }
-
-    let activated = app.activate(options: [.activateIgnoringOtherApps])
-    let axApp = AXUIElementCreateApplication(app.processIdentifier)
-
-    if let window = snapshot.window {
-        AXUIElementSetAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, window)
-        AXUIElementPerformAction(window, kAXRaiseAction as CFString)
-    }
-
-    return activated
-}
-
-private func restoreInputFocus(_ target: InputFocusTarget?) -> Bool {
-    guard let target else {
-        return false
-    }
-    guard restoreFocus(target.focus) else {
-        return false
-    }
-
-    let axApp = AXUIElementCreateApplication(target.focus.processIdentifier)
-    if let window = target.focus.window {
-        AXUIElementSetAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, window)
-        AXUIElementPerformAction(window, kAXRaiseAction as CFString)
-    }
-
-    let focusedOnApp = AXUIElementSetAttributeValue(axApp, kAXFocusedUIElementAttribute as CFString, target.element)
-    let focusedOnElement = AXUIElementSetAttributeValue(target.element,
-                                                        kAXFocusedAttribute as CFString,
-                                                        kCFBooleanTrue)
-    return focusedOnApp == .success || focusedOnElement == .success
-}
-
-private func restoreInputFocusAfterTypelessShortcut(target: InputFocusTarget?,
-                                                    snapshot: FocusSnapshot?,
-                                                    reason: String) {
-    let restoreAction = {
-        let restored: Bool
-        if let target {
-            restored = restoreInputFocus(target)
-            if !restored {
-                _ = restoreFocus(target.focus)
-            }
-        } else {
-            restored = restoreFocus(snapshot)
-        }
-        log(restored ? "focus restored after typeless \(reason)" : "focus restore failed after typeless \(reason)")
-    }
-
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: restoreAction)
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.55, execute: restoreAction)
 }
 
 private func compactDuration(_ seconds: Int) -> String {
@@ -1613,13 +1483,12 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private var healthTimer: Timer?
     private var panelSequence = 1
     private var quotaFetchInFlight = false
+    private var bridgeDiscoveryInFlight = false
     private var lastTimePanelPushAt = Date.distantPast
     private var typelessSessionActive = false
-    private var typelessFocusSnapshot: FocusSnapshot?
-    private var lockedInputTarget: InputFocusTarget?
     private var processingUntil: Date?
     private var processingStartedAt: Date?
-    private var pendingCodexEnter = false
+    private var typelessPrimaryIsDown = false
     private var wechatOptionDown = false
     private var wechatHeldBinding: KeyBinding?
     private var typelessPrimaryDownAt: Date?
@@ -1647,11 +1516,6 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     @objc private func settingsChanged() {
         SettingsStore.shared.reload()
         if SettingsStore.shared.settings.inputMode != .wechatIME && wechatOptionDown {
-            if let binding = wechatHeldBinding {
-                postKeyUp(binding)
-            } else {
-                postKeyUp(keyCode: UInt16(kVK_RightOption), flags: [])
-            }
             wechatOptionDown = false
             wechatHeldBinding = nil
         }
@@ -1726,7 +1590,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         resetBridgeCharacteristics()
         BridgeStatusCenter.shared.bleStatus = "Connected"
         log("Connected. Discovering bridge service...")
-        peripheral.discoverServices([serviceUUID])
+        discoverBridgeServices(peripheral, reason: "connect")
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
@@ -1760,6 +1624,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             log("Discover services failed: \(error.localizedDescription)")
             exit(1)
         }
+        bridgeDiscoveryInFlight = false
         guard let service = peripheral.services?.first(where: { $0.uuid == serviceUUID }) else {
             BridgeStatusCenter.shared.bleStatus = "Bridge service missing"
             log("Bridge service not found. Check firmware UUID / Bluetooth setting.")
@@ -1776,6 +1641,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             log("Discover characteristics failed: \(error.localizedDescription)")
             exit(1)
         }
+        bridgeDiscoveryInFlight = false
 
         for characteristic in service.characteristics ?? [] {
             if characteristic.uuid == eventUUID {
@@ -1851,7 +1717,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         case "input_primary_up":
             handlePrimaryInputUp()
         case "input_primary_tap":
-            handlePrimaryInputTap()
+            log("legacy primary tap event ignored after hold/release protocol cleanup")
         case "input_confirm_tap":
             handleCodexEnterRequest()
         case "shake_action":
@@ -1879,6 +1745,17 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         lastBridgeConfigPayload = nil
         statusWriteQueue.removeAll()
         statusWriteInFlight = false
+        bridgeDiscoveryInFlight = false
+    }
+
+    private func discoverBridgeServices(_ peripheral: CBPeripheral, reason: String) {
+        guard !bridgeDiscoveryInFlight else {
+            log("Bridge discovery already in flight; skip \(reason).")
+            return
+        }
+        bridgeDiscoveryInFlight = true
+        lastRediscoverAt = Date()
+        peripheral.discoverServices([serviceUUID])
     }
 
     private func startHealthLoop() {
@@ -1901,9 +1778,8 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             !eventNotifyEnabled
 
         if missingBridge && Date().timeIntervalSince(lastRediscoverAt) > 8 {
-            lastRediscoverAt = Date()
             log("Bridge health check: rediscovering services/characteristics.")
-            peripheral.discoverServices([serviceUUID])
+            discoverBridgeServices(peripheral, reason: "health")
         }
 
         if eventCharacteristic != nil && !eventNotifyEnabled {
@@ -2009,12 +1885,18 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         switch SettingsStore.shared.settings.inputMode {
         case .typeless:
             let now = Date()
+            if typelessPrimaryIsDown {
+                log("typeless primary down ignored; key already down")
+                return
+            }
             if let lastDown = typelessPrimaryDownAt,
                now.timeIntervalSince(lastDown) < typelessPrimaryDownDebounceSeconds {
                 log("typeless primary down ignored; duplicate event debounce")
                 return
             }
             typelessPrimaryDownAt = now
+            typelessPrimaryIsDown = true
+            typelessSessionActive = false
             handleTypelessPrimaryDownStatus()
         case .wechatIME:
             handleWeChatOptionDown()
@@ -2024,18 +1906,15 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private func handlePrimaryInputUp() {
         switch SettingsStore.shared.settings.inputMode {
         case .typeless:
+            guard typelessPrimaryIsDown || typelessSessionActive || lastState?.phase == "recording" else {
+                log("typeless primary up observed; no active local session")
+                return
+            }
+            typelessPrimaryIsDown = false
             log("typeless primary up observed; firmware owns HID release")
+            handleTypelessStopStatus(reason: "release")
         case .wechatIME:
             handleWeChatOptionUp()
-        }
-    }
-
-    private func handlePrimaryInputTap() {
-        switch SettingsStore.shared.settings.inputMode {
-        case .typeless:
-            handleTypelessPrimaryDownStatus()
-        case .wechatIME:
-            handleWeChatOptionTap()
         }
     }
 
@@ -2055,13 +1934,6 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         wechatHeldBinding = nil
         write(VoiceState(active: false, phase: "idle", message: "WeChat idle"))
         log("wechat input: \(binding.name) up delegated to firmware HID keyCode=\(binding.macKeyCode)")
-    }
-
-    private func handleWeChatOptionTap() {
-        handleWeChatOptionDown()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
-            self?.handleWeChatOptionUp()
-        }
     }
 
     private func handleCodexEnterRequest() {
@@ -2084,11 +1956,6 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         log("codex enter observed; firmware sent HID")
     }
 
-    private func performCodexEnter(reason: String) {
-        pendingCodexEnter = false
-        log("codex enter helper skipped reason=\(reason); firmware owns HID key")
-    }
-
     private func handleShakeActionRequest() {
         if SettingsStore.shared.settings.shakeActionName == "Clear Input" {
             resetTypelessSessionTracking(clearFocus: true)
@@ -2097,22 +1964,12 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         log("shake action observed; firmware sent HID action \(SettingsStore.shared.settings.shakeActionName)")
     }
 
-    private func performClearInput() {
-        resetTypelessSessionTracking(clearFocus: true)
-        write(VoiceState(active: false, phase: "idle", message: ""))
-        log("clear input status reset; firmware owns HID action")
-    }
-
     private func resetTypelessSessionTracking(clearFocus: Bool) {
         typelessSessionActive = false
+        typelessPrimaryIsDown = false
         processingUntil = nil
         processingStartedAt = nil
-        pendingCodexEnter = false
         typelessPrimaryDownAt = nil
-        if clearFocus {
-            typelessFocusSnapshot = nil
-            lockedInputTarget = nil
-        }
     }
 
     private func handleTypelessPrimaryDownStatus() {
@@ -2136,8 +1993,6 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         if !shouldStop {
             let target = currentInputFocusTarget()
             let focus = target?.focus ?? frontmostFocusSnapshot()
-            lockedInputTarget = target
-            typelessFocusSnapshot = focus
             typelessSessionActive = true
             write(VoiceState(active: true, phase: "recording", message: "正在录制中"))
             if let target {
@@ -2350,14 +2205,8 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
 
     private func writeCurrentState(force: Bool) {
         let state = resolvedState()
-        if state.phase == "idle" && state.message != "Typeless 待机" {
+        if state.phase == "idle" && !typelessPrimaryIsDown {
             typelessSessionActive = false
-        }
-        if pendingCodexEnter && state.phase == "idle" && processingUntil == nil {
-            pendingCodexEnter = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) { [weak self] in
-                self?.performCodexEnter(reason: "queued")
-            }
         }
         guard force || state != lastState else {
             return
@@ -2411,8 +2260,16 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             return VoiceState(active: true, phase: "processing", message: "")
         }
         let detected = currentTypelessState()
-        if typelessSessionActive && detected.phase == "idle" && detected.message == "Typeless 待机" {
+        if typelessPrimaryIsDown {
             return VoiceState(active: true, phase: "recording", message: "正在录制中")
+        }
+        if typelessSessionActive && detected.phase == "idle" && detected.message == "Typeless 待机" {
+            if let lastDown = typelessPrimaryDownAt,
+               Date().timeIntervalSince(lastDown) <= typelessStartIdleGraceSeconds {
+                return VoiceState(active: true, phase: "recording", message: "正在录制中")
+            }
+            typelessSessionActive = false
+            return detected
         }
         return detected
     }

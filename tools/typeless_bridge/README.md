@@ -150,7 +150,14 @@ This installs:
 
 The LaunchAgent starts the app at login. `KeepAlive` is disabled, so quitting the menu-bar app is respected.
 
-The installer skips ad-hoc codesigning by default to reduce macOS Accessibility permission invalidation during development. Set `SIGN_BRIDGE_APP=1` before running the installer if you explicitly want to sign the app bundle.
+For stable macOS Accessibility permission across app updates, create a local signing identity once:
+
+```bash
+tools/typeless_bridge/create_local_codesign_identity.sh
+tools/typeless_bridge/install_launch_agent.sh
+```
+
+The installer uses `M5StopWatch Local Code Signing` automatically when it exists. After granting Accessibility once for that signed app, later rebuilds should keep the same authorization. If no local identity exists, the installer skips signing by default. Set `SIGN_BRIDGE_APP=1` only when you explicitly want ad-hoc signing; ad-hoc signatures can invalidate Accessibility permission after each rebuild.
 
 ## Uninstall
 

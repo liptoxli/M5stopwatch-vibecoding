@@ -8,7 +8,6 @@ namespace ble_bridge {
 enum class ButtonAction : uint8_t {
     Down,
     Up,
-    Tap,
 };
 
 enum class VoicePhase : uint8_t {
