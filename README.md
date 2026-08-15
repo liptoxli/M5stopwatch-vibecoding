@@ -1,6 +1,11 @@
 # M5stopwatch-vibecoding
 
+![Version](https://img.shields.io/badge/version-v0.6.0-6f5cff)
+![Platform](https://img.shields.io/badge/platform-ESP32--S3%20%7C%20macOS-2f81f7)
+
 M5Stack StopWatch 的 Codex vibe-coding 模块、扩展固件和 macOS 桥接应用。
+
+当前公开版本是 **v0.6.0**（2026-08-15）。固件的 About 页面和启动界面显示同一版本号；每次公开迭代都必须同时更新版本文件、固件版本、README 和变更记录。版本历史见 [CHANGELOG.md](CHANGELOG.md)，发布流程见 [docs/RELEASING.md](docs/RELEASING.md)。
 
 ![Codex StopWatch 实机运行效果](docs/assets/codex-stopwatch-ui-actual.jpeg)
 
@@ -56,6 +61,8 @@ docs/                     功能说明、额度机制、宠物替换指南
 ## 构建固件
 
 需要 ESP-IDF v5.5.x 和 M5Stack StopWatch 目标硬件。
+
+仓库根目录的 `VERSION` 和 `firmware-stopwatch-idf/version.txt` 是当前公开版本标识，构建前可运行 `tools/check_version.sh` 检查版本是否一致。
 
 ```bash
 cd firmware-stopwatch-idf
