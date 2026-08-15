@@ -7,7 +7,8 @@ It provides four local functions:
 - Connect to `M5Codex-*` over Bluetooth.
 - Sync configurable key bindings and input mode to firmware.
 - Optionally observe Typeless recording/processing state and sync it back to the device.
-- Optionally read local Codex auth and push quota snapshots to the device.
+- Optionally read local Codex auth and push weekly quota snapshots to the device.
+- Persist a daily weekly-quota baseline using an 08:00 local-time boundary.
 
 Real keyboard input is sent by the device firmware through BLE HID. The bridge app does not inject Typeless, WeChat IME, Enter, or Clear Input keystrokes into macOS. No account credentials are bundled in the app. Codex quota sync is optional and reads the current user's local `~/.codex/auth.json` only when enabled.
 
@@ -30,6 +31,7 @@ Real keyboard input is sent by the device firmware through BLE HID. The bridge a
 
    - Left key: default `F19`.
    - Right key: default `Return`.
+   - Right key long press: default `Command+Return` for Codex guide/follow-up insertion.
    - Quota refresh interval: default `300` seconds.
    - Codex quota push: enabled by default, requires local Codex login.
    - Typeless shortcut sync: disabled by default. Enable only when using Typeless and you want the app to write the left key into Typeless local settings.
@@ -46,6 +48,7 @@ Only one Mac can be connected at a time. If two paired Macs are in the same room
 
 - Left action: `F19`
 - Codex confirm: `Return`
+- Codex guide/follow-up: `Command+Return`
 - Quota refresh: `300` seconds
 - LaunchAgent: start at login, do not force-restart after user quits
 
@@ -82,7 +85,7 @@ For other input apps, leave Typeless shortcut sync disabled and configure shortc
 
 ### Input boundary
 
-The left key toggles voice input and the right key confirms/sends through firmware BLE HID. The bridge app observes device events only to update status on the StopWatch screen. It does not restore focus, queue Enter, or simulate keyboard events on macOS.
+The left key toggles voice input and the right key confirms/sends through firmware BLE HID. Holding the right key for two seconds sends the configured long-press action; the default is `Command+Return` for Codex guide/follow-up insertion. The bridge app observes device events only to update status on the StopWatch screen. It does not restore focus, queue Enter, or simulate keyboard events on macOS.
 
 If Accessibility is unavailable, the app reports `bridge_limited` to the device. The device still sends its configured BLE HID keys, but Typeless state detection is limited.
 
@@ -103,6 +106,47 @@ https://chatgpt.com/backend-api/wham/usage
 ```
 
 If the user is not logged in locally, quota push fails but the BLE keyboard and Typeless controls still work.
+
+Codex currently exposes only a weekly quota window. The bridge ignores retired
+5-hour windows and sends only `codex.weekly`.
+
+### Daily 08:00 tracking
+
+The first successful weekly quota sample in each local-time period from 08:00
+through the next day at 07:59 establishes the daily baseline. State is persisted
+at:
+
+```text
+~/Library/Application Support/M5StopWatch/StopWatchBleBridge/codex-weekly-daily.json
+```
+
+Each BLE quota panel includes:
+
+```json
+{
+  "codex": {
+    "weekly": {
+      "left_pct": 85,
+      "daily_tracking": {
+        "boundary_hour_local": 8,
+        "day_key": "2026-07-16",
+        "period_start": "2026-07-16T08:00:00+08:00",
+        "day_start_left_pct": 91,
+        "segment_start_left_pct": 91,
+        "current_left_pct": 85,
+        "used_since_start_pct_points": 6,
+        "reset_count": 0,
+        "updated_at": "2026-07-16T14:30:00+08:00"
+      }
+    }
+  }
+}
+```
+
+Quota decreases are accumulated as daily usage. If the weekly quota resets and
+the remaining percentage jumps upward, the jump is not counted as negative
+usage; `reset_count` increments and `segment_start_left_pct` starts a new
+visual segment. `day_start_left_pct` remains the original daily marker.
 
 For open-source users, document this as:
 

@@ -33,11 +33,12 @@
 ![Codex StopWatch 实机运行效果](assets/codex-stopwatch-ui-actual.jpeg)
 
 - 顶部：当前时间，使用低调发光样式。
-- 左侧弧线：Codex 5 小时额度。
-- 右侧弧线：Codex 周额度。
+- 下半圆连续弧线：历史已消耗底轨、08:00 后今日已消耗、当前周剩余额度。
+- 左端标签：`TODAY`，显示本地 08:00 统计边界后的累计消耗百分点。
+- 右端标签：`LEFT`，显示当前周剩余额度。
+- 下方居中：周额度刷新倒计时。
 - 中央：Pet 主体和状态动画，整体位置略高于圆心。
-- 中下：今日在线/状态胶囊。
-- 底部：BLE、Wi-Fi、语音和错误状态点。
+- 顶部时钟下方：BLE、Wi-Fi 状态点。
 - 顶部下拉层：电量状态栏。向下滑显示，向上滑隐藏。
 
 电量策略：
@@ -53,8 +54,9 @@
 1. 用户在 Mac 上安装并登录 Codex。
 2. Bridge 可选读取 `~/.codex/auth.json`。
 3. Bridge 调用 `https://chatgpt.com/backend-api/wham/usage`。
-4. Bridge 把 5 小时额度、周额度、重置时间、状态转换成设备面板 payload。
-5. 固件通过 BLE GATT 接收 payload 并更新 Codex 页面。
+4. Bridge 只保留 604800 秒周窗口，并维护本地时间 08:00 到次日 07:59 的每日统计。
+5. Bridge 把周剩余额度、今日累计消耗、重置时间和状态转换成设备面板 payload。
+6. 固件通过 BLE GATT 接收 payload、缓存安全摘要并更新 Codex 页面。
 
 固件里仍保留 Wi-Fi panel fallback，但公开版默认关闭：
 
@@ -126,11 +128,7 @@ Bridge 菜单栏应用提供：
 
 ## 8. Typeless 和设备状态栏
 
-Typeless 模式下，Bridge 使用 Accessibility 做三件事：
-
-- 记录触发前的输入焦点。
-- 识别 Typeless 录音、处理中、完成等状态。
-- 必要时恢复焦点，并延迟发送确认键，避免文字还没插入就回车。
+Typeless 模式下，Bridge 使用 Accessibility 观察 Typeless 的录音、处理中和完成状态，再把状态同步到设备。真实输入按键由设备固件通过 BLE HID 发送；Bridge 不恢复焦点、不排队发送 Enter，也不在 macOS 上模拟按键。
 
 设备状态栏会显示 BLE、语音、额度和错误状态。Accessibility 权限缺失时，Bridge 会进入 limited 状态，设备仍可通过 BLE HID fallback 使用基础按键。
 
@@ -152,6 +150,6 @@ Typeless 模式下，Bridge 使用 Accessibility 做三件事：
 
 - 1 分钟：屏幕降到 10% 亮度，CPU 进入 80MHz 低频配置。
 - 3 分钟：关闭 Wi-Fi radio、停止振动、停止 LVGL 更新、屏幕背光归零，并让屏幕进入 activity sleep。
-- 10 分钟：进入 ESP deep sleep，只保留 A/B 物理按键唤醒。
+- 15 分钟且未接外部电源：停止显示和无线活动后请求 PMIC 关机。
 
 Wi-Fi 默认关闭；音频输出保留，音频输入关闭。这样保留开机/按键音效，同时减少麦克风链路功耗。

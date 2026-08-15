@@ -23,6 +23,8 @@ private:
     void handleBluetoothKeys();
     void updateBatteryStatusBar(uint32_t now);
 
+    static constexpr uint32_t kConfirmLongPressMs = 2000;
+
     std::unique_ptr<input::KeyManager> _key_manager;
     std::unique_ptr<view::CodexView> _view;
     codex::QuotaClient _quota_client;
@@ -32,10 +34,11 @@ private:
     uint32_t _applied_host_panel_sequence = 0;
     uint32_t _last_view_update_ms = 0;
     uint32_t _last_battery_check_ms = 0;
-    uint32_t _primary_input_down_ms = 0;
     bool _applied_ble_connected = false;
     bool _voice_active = false;
     bool _applied_voice_active = false;
+    bool _confirm_long_sent = false;
+    uint32_t _primary_input_down_ms = 0;
     uint32_t _voice_mode_since_ms = 0;
     view::CodexView::VoiceMode _voice_mode = view::CodexView::VoiceMode::Idle;
     view::CodexView::VoiceMode _applied_voice_mode = view::CodexView::VoiceMode::Idle;

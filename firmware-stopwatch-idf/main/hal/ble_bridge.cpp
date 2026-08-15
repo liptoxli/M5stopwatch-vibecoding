@@ -166,7 +166,9 @@ uint32_t g_host_panel_sequence = 0;
 HostInputMode g_host_input_mode = HostInputMode::Typeless;
 HostKeyBinding g_primary_binding = {0, kKeyF19};
 HostKeyBinding g_confirm_binding = {0, kKeyEnter};
+HostKeyBinding g_confirm_long_binding = {kModifierLeftGui, kKeyEnter};
 HostKeyBinding g_shake_binding = {0, 0};
+std::string g_confirm_long_action = "Command+Return";
 std::string g_shake_action = "Clear Input";
 bool g_host_config_loaded = false;
 int g_panel_seq = -1;
@@ -267,14 +269,20 @@ void load_host_input_config()
     g_confirm_binding.keycode = clamp_hid_byte(settings.GetInt("confirm_key", g_confirm_binding.keycode), g_confirm_binding.keycode);
     g_shake_binding.modifier = clamp_hid_byte(settings.GetInt("shake_mod", g_shake_binding.modifier), g_shake_binding.modifier);
     g_shake_binding.keycode = clamp_hid_byte(settings.GetInt("shake_key", g_shake_binding.keycode), g_shake_binding.keycode);
+    g_confirm_long_binding.modifier = clamp_hid_byte(settings.GetInt("cfm_l_mod", g_confirm_long_binding.modifier), g_confirm_long_binding.modifier);
+    g_confirm_long_binding.keycode = clamp_hid_byte(settings.GetInt("cfm_l_key", g_confirm_long_binding.keycode), g_confirm_long_binding.keycode);
+    g_confirm_long_action = settings.GetString("cfm_l_act", g_confirm_long_action);
     g_shake_action = settings.GetString("shake_action", g_shake_action);
     mclog::tagInfo(kTag,
-                   "loaded input config: mode={} primary_mod=0x{:02x} primary_key=0x{:02x} confirm_mod=0x{:02x} confirm_key=0x{:02x} shake={} shake_mod=0x{:02x} shake_key=0x{:02x}",
+                   "loaded input config: mode={} primary_mod=0x{:02x} primary_key=0x{:02x} confirm_mod=0x{:02x} confirm_key=0x{:02x} confirm_long={} confirm_long_mod=0x{:02x} confirm_long_key=0x{:02x} shake={} shake_mod=0x{:02x} shake_key=0x{:02x}",
                    input_mode_storage_value(),
                    static_cast<int>(g_primary_binding.modifier),
                    static_cast<int>(g_primary_binding.keycode),
                    static_cast<int>(g_confirm_binding.modifier),
                    static_cast<int>(g_confirm_binding.keycode),
+                   g_confirm_long_action,
+                   static_cast<int>(g_confirm_long_binding.modifier),
+                   static_cast<int>(g_confirm_long_binding.keycode),
                    g_shake_action,
                    static_cast<int>(g_shake_binding.modifier),
                    static_cast<int>(g_shake_binding.keycode));
@@ -288,16 +296,22 @@ void save_host_input_config()
     settings.SetInt("primary_key", g_primary_binding.keycode);
     settings.SetInt("confirm_mod", g_confirm_binding.modifier);
     settings.SetInt("confirm_key", g_confirm_binding.keycode);
+    settings.SetInt("cfm_l_mod", g_confirm_long_binding.modifier);
+    settings.SetInt("cfm_l_key", g_confirm_long_binding.keycode);
+    settings.SetString("cfm_l_act", g_confirm_long_action);
     settings.SetInt("shake_mod", g_shake_binding.modifier);
     settings.SetInt("shake_key", g_shake_binding.keycode);
     settings.SetString("shake_action", g_shake_action);
     mclog::tagInfo(kTag,
-                   "saved input config: mode={} primary_mod=0x{:02x} primary_key=0x{:02x} confirm_mod=0x{:02x} confirm_key=0x{:02x} shake={} shake_mod=0x{:02x} shake_key=0x{:02x}",
+                   "saved input config: mode={} primary_mod=0x{:02x} primary_key=0x{:02x} confirm_mod=0x{:02x} confirm_key=0x{:02x} confirm_long={} confirm_long_mod=0x{:02x} confirm_long_key=0x{:02x} shake={} shake_mod=0x{:02x} shake_key=0x{:02x}",
                    input_mode_storage_value(),
                    static_cast<int>(g_primary_binding.modifier),
                    static_cast<int>(g_primary_binding.keycode),
                    static_cast<int>(g_confirm_binding.modifier),
                    static_cast<int>(g_confirm_binding.keycode),
+                   g_confirm_long_action,
+                   static_cast<int>(g_confirm_long_binding.modifier),
+                   static_cast<int>(g_confirm_long_binding.keycode),
                    g_shake_action,
                    static_cast<int>(g_shake_binding.modifier),
                    static_cast<int>(g_shake_binding.keycode));
@@ -318,27 +332,40 @@ bool send_hid_binding_tap(const HostKeyBinding& binding)
     return false;
 }
 
+bool execute_named_hid_action(const std::string& raw_action, const HostKeyBinding& key_binding, const char* label)
+{
+    const std::string action = lowercase(raw_action);
+    if (action == "none") {
+        set_host_status(label);
+        return true;
+    }
+    if (action == "escape") {
+        set_host_status(label);
+        send_hid_binding_tap({0, kKeyEscape});
+        return true;
+    }
+    if (action == "return") {
+        set_host_status(label);
+        send_hid_binding_tap({0, kKeyEnter});
+        return true;
+    }
+    if (action == "command+return" || action == "command+enter" || action == "codex guide") {
+        set_host_status(label);
+        send_hid_binding_tap({kModifierLeftGui, kKeyEnter});
+        return true;
+    }
+    if (action.rfind("key:", 0) == 0 && key_binding.keycode != 0) {
+        set_host_status(label);
+        send_hid_binding_tap(key_binding);
+        return true;
+    }
+    return false;
+}
+
 void execute_shake_hid_action()
 {
     load_host_input_config();
-    const std::string action = lowercase(g_shake_action);
-    if (action == "none") {
-        set_host_status("Shake disabled");
-        return;
-    }
-    if (action == "escape") {
-        set_host_status("Shake Escape");
-        send_hid_binding_tap({0, kKeyEscape});
-        return;
-    }
-    if (action == "return") {
-        set_host_status("Shake Return");
-        send_hid_binding_tap({0, kKeyEnter});
-        return;
-    }
-    if (action.rfind("key:", 0) == 0 && g_shake_binding.keycode != 0) {
-        set_host_status("Shake key");
-        send_hid_binding_tap(g_shake_binding);
+    if (execute_named_hid_action(g_shake_action, g_shake_binding, "Shake key")) {
         return;
     }
 
@@ -562,7 +589,7 @@ void apply_voice_payload(const std::string& payload)
     }
 
     mark_companion_ready();
-    if (contains_any(lower, {"\"input_mode\":", "\"primary_key\":", "\"confirm_key\":", "\"shake_action\":"})) {
+    if (contains_any(lower, {"\"input_mode\":", "\"primary_key\":", "\"confirm_key\":", "\"confirm_long_action\":", "\"shake_action\":"})) {
         ESP_LOGI(kTag, "bridge config payload: %s", payload.c_str());
         if (contains_any(lower, {"\"input_mode\":\"wechat_ime\"", "\"input_mode\":\"wechat\"", "\"mode\":\"wechat_ime\""})) {
             apply_default_bindings_for_mode(HostInputMode::WechatIme);
@@ -576,19 +603,28 @@ void apply_voice_payload(const std::string& payload)
         g_primary_binding.keycode = clamp_hid_byte(json_int_field(payload, "primary_key", g_primary_binding.keycode), g_primary_binding.keycode);
         g_confirm_binding.modifier = clamp_hid_byte(json_int_field(payload, "confirm_modifier", g_confirm_binding.modifier), g_confirm_binding.modifier);
         g_confirm_binding.keycode = clamp_hid_byte(json_int_field(payload, "confirm_key", g_confirm_binding.keycode), g_confirm_binding.keycode);
+        g_confirm_long_binding.modifier = clamp_hid_byte(json_int_field(payload, "confirm_long_modifier", g_confirm_long_binding.modifier), g_confirm_long_binding.modifier);
+        g_confirm_long_binding.keycode = clamp_hid_byte(json_int_field(payload, "confirm_long_key", g_confirm_long_binding.keycode), g_confirm_long_binding.keycode);
         g_shake_binding.modifier = clamp_hid_byte(json_int_field(payload, "shake_modifier", g_shake_binding.modifier), g_shake_binding.modifier);
         g_shake_binding.keycode = clamp_hid_byte(json_int_field(payload, "shake_key", g_shake_binding.keycode), g_shake_binding.keycode);
+        const std::string confirm_long_action = json_string_field(payload, "confirm_long_action");
+        if (!confirm_long_action.empty()) {
+            g_confirm_long_action = confirm_long_action;
+        }
         const std::string shake_action = json_string_field(payload, "shake_action");
         if (!shake_action.empty()) {
             g_shake_action = shake_action;
         }
         ESP_LOGI(kTag,
-                 "bridge config parsed: mode=%s primary_mod=0x%02x primary_key=0x%02x confirm_mod=0x%02x confirm_key=0x%02x shake=%s shake_mod=0x%02x shake_key=0x%02x",
+                 "bridge config parsed: mode=%s primary_mod=0x%02x primary_key=0x%02x confirm_mod=0x%02x confirm_key=0x%02x confirm_long=%s confirm_long_mod=0x%02x confirm_long_key=0x%02x shake=%s shake_mod=0x%02x shake_key=0x%02x",
                  g_host_input_mode == HostInputMode::WechatIme ? "wechat_ime" : "typeless",
                  static_cast<unsigned>(g_primary_binding.modifier),
                  static_cast<unsigned>(g_primary_binding.keycode),
                  static_cast<unsigned>(g_confirm_binding.modifier),
                  static_cast<unsigned>(g_confirm_binding.keycode),
+                 g_confirm_long_action.c_str(),
+                 static_cast<unsigned>(g_confirm_long_binding.modifier),
+                 static_cast<unsigned>(g_confirm_long_binding.keycode),
                  g_shake_action.c_str(),
                  static_cast<unsigned>(g_shake_binding.modifier),
                  static_cast<unsigned>(g_shake_binding.keycode));
@@ -1336,6 +1372,17 @@ void send_codex_enter()
     notify_bridge_event("input_confirm_tap");
     set_host_status("Input confirm key");
     send_hid_binding_tap(g_confirm_binding);
+}
+
+void send_confirm_long_press()
+{
+    load_host_input_config();
+    notify_bridge_event("input_confirm_long");
+    mclog::tagInfo(kTag, "Confirm long press via HID: {}", g_confirm_long_action);
+    if (!execute_named_hid_action(g_confirm_long_action, g_confirm_long_binding, "Input guide key")) {
+        set_host_status("Input guide key");
+        send_hid_binding_tap(g_confirm_long_binding);
+    }
 }
 
 void send_shake_action()

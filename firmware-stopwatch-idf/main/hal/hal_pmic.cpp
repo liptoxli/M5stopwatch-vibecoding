@@ -229,6 +229,14 @@ bool Hal::pmic_get_pwr_btn_state()
     return result;
 }
 
+void Hal::powerOff()
+{
+    mclog::tagInfo(_tag, "power off requested");
+    if (_pm1) {
+        _pm1->shutdown();
+    }
+}
+
 uint8_t Hal::getBatteryLevel()
 {
     std::lock_guard<std::mutex> lock(_bat_level_mutex);

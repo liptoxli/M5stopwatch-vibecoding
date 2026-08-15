@@ -42,6 +42,16 @@ https://chatgpt.com/backend-api/wham/usage
 
 Bridge 不保存 access token，只使用本机已有登录文件即时请求。请求结果被归一化为设备 payload，再通过 BLE GATT 写入设备的 panel characteristic。
 
+当前正式 contract 只接受 604800 秒的 weekly window，不再显示或回退到 5 小时窗口。Bridge 同时维护本地 08:00 到次日 07:59 的每日统计：
+
+- `day_start_left_pct`：本周期第一次成功采样时的周剩余额度。
+- `segment_start_left_pct`：当前周额度段的起点。
+- `current_left_pct`：当前周剩余额度。
+- `used_since_start_pct_points`：本周期累计消耗百分点。
+- `reset_count`：本周期检测到的周额度重置次数。
+
+如果周额度在日统计周期内重置，剩余额度向上跳变不会被当作负消耗；Bridge 会开始新的统计段并累计 `reset_count`。如果 Bridge 在 08:00 没运行，无法回溯边界到首次成功采样之间的精确消耗。
+
 设备侧接收路径：
 
 ```text
