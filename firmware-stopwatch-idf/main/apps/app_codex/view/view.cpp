@@ -17,17 +17,81 @@ using namespace uitk::lvgl_cpp;
 
 namespace {
 
-constexpr uint32_t kColorClock   = 0xCDEBF9;
-constexpr uint32_t kColor5h      = 0x45D9FF;
-constexpr uint32_t kColorWeek    = 0x8FB6FF;
-constexpr uint32_t kColorTrack   = 0x25314A;
-constexpr uint32_t kColorText    = 0xE8F8FF;
-constexpr uint32_t kColorTextDim = 0x7F98A3;
+constexpr uint32_t kColorClock   = 0xEEF2FF;
+constexpr uint32_t kColorWeek    = 0x78DFF5;
+constexpr uint32_t kColorToday   = 0x397FA6;
+constexpr uint32_t kColorTrack   = 0x1D3442;
+constexpr uint32_t kColorWeekText = 0xA5EDFF;
+constexpr uint32_t kColorTodayText = 0x64A9CA;
+constexpr uint32_t kColorText    = 0xEEF2FF;
+constexpr uint32_t kColorTextDim = 0x8C96B3;
 constexpr uint32_t kColorPetBody = 0x172847;
 constexpr uint32_t kColorPetFace = 0xD9FBFF;
+constexpr uint32_t kOwBackground = 0x05070B;
+constexpr uint32_t kOwPanel      = 0x10161F;
+constexpr uint32_t kOwPanelAlt   = 0x121C29;
+constexpr uint32_t kOwBlue       = 0x35B8FF;
+constexpr uint32_t kOwGreen      = 0x55F36A;
+constexpr uint32_t kOwAmber      = 0xFFC542;
+constexpr uint32_t kOwTeal       = 0x2DF1D3;
+constexpr uint32_t kOwSoftText   = 0xADB9CC;
+constexpr uint32_t kOwTrack      = 0x1E2A3C;
 constexpr uint32_t kPetTouchEffectMs = 1050;
 constexpr uint32_t kPetIdleFrameMs = 50;
 constexpr uint32_t kPetActiveFrameMs = 33;
+
+constexpr int kScreenSize = 466;
+constexpr int kScreenCenter = 233;
+constexpr int kScreenRadius = 233;
+constexpr int kQuotaRadius = 219;
+constexpr int kQuotaWidth = 18;
+constexpr int kQuotaEndpointLabelWidth = 90;
+constexpr int kQuotaEndpointLabelInset = 10;
+constexpr int kQuotaLeftLabelX = kScreenCenter - kQuotaRadius + kQuotaEndpointLabelInset;
+constexpr int kQuotaRightLabelX = kScreenCenter + kQuotaRadius - kQuotaEndpointLabelInset - kQuotaEndpointLabelWidth;
+constexpr int kQuotaCaptionY = kScreenCenter - 38;
+constexpr int kQuotaValueY = kScreenCenter - 16;
+constexpr int kQuotaGradientHalfAngle = 3;
+
+uint32_t blendRgb(uint32_t from, uint32_t to, float amount)
+{
+    const float t = std::clamp(amount, 0.0f, 1.0f);
+    const auto blend_channel = [t](uint32_t a, uint32_t b) {
+        return static_cast<uint32_t>(std::lround(static_cast<float>(a) +
+                                                 (static_cast<float>(b) - static_cast<float>(a)) * t));
+    };
+    const uint32_t red = blend_channel((from >> 16) & 0xFF, (to >> 16) & 0xFF);
+    const uint32_t green = blend_channel((from >> 8) & 0xFF, (to >> 8) & 0xFF);
+    const uint32_t blue = blend_channel(from & 0xFF, to & 0xFF);
+    return (red << 16) | (green << 8) | blue;
+}
+
+constexpr int square(int value)
+{
+    return value * value;
+}
+
+constexpr bool pointInsideRoundDisplay(int x, int y)
+{
+    return square(x - kScreenCenter) + square(y - kScreenCenter) <= square(kScreenRadius);
+}
+
+constexpr bool rectInsideRoundDisplay(int x, int y, int width, int height)
+{
+    return pointInsideRoundDisplay(x, y) &&
+           pointInsideRoundDisplay(x + width - 1, y) &&
+           pointInsideRoundDisplay(x, y + height - 1) &&
+           pointInsideRoundDisplay(x + width - 1, y + height - 1);
+}
+
+static_assert(kQuotaRadius + kQuotaWidth / 2 <= kScreenRadius - 5,
+              "Quota arc must stay inside the AMOLED safe radius");
+static_assert(rectInsideRoundDisplay(kQuotaLeftLabelX, kQuotaCaptionY, kQuotaEndpointLabelWidth, 60),
+              "Today quota labels must stay inside the round display");
+static_assert(rectInsideRoundDisplay(kQuotaRightLabelX, kQuotaCaptionY, kQuotaEndpointLabelWidth, 60),
+              "Remaining quota labels must stay inside the round display");
+static_assert(rectInsideRoundDisplay(168, 394, 130, 28),
+              "Quota refresh label must stay inside the round display");
 
 void setup_clock_digit_panel(Container& panel, int x)
 {
@@ -37,9 +101,9 @@ void setup_clock_digit_panel(Container& panel, int x)
     panel.setBorderWidth(0);
     panel.setBgColor(lv_color_hex(0x0A1B26));
     panel.setBgOpa(210);
-    panel.setShadowWidth(12);
+    panel.setShadowWidth(8);
     panel.setShadowColor(lv_color_hex(0x17465B));
-    panel.setShadowOpa(70);
+    panel.setShadowOpa(45);
     panel.setPaddingAll(0);
     panel.removeFlag(LV_OBJ_FLAG_SCROLLABLE);
 }
@@ -63,6 +127,35 @@ float clamp01(float value)
         return 1.0f;
     }
     return value;
+}
+
+uint32_t blend_color(uint32_t from, uint32_t to, float amount)
+{
+    const float t = clamp01(amount);
+    const uint8_t fr = static_cast<uint8_t>((from >> 16) & 0xFF);
+    const uint8_t fg = static_cast<uint8_t>((from >> 8) & 0xFF);
+    const uint8_t fb = static_cast<uint8_t>(from & 0xFF);
+    const uint8_t tr = static_cast<uint8_t>((to >> 16) & 0xFF);
+    const uint8_t tg = static_cast<uint8_t>((to >> 8) & 0xFF);
+    const uint8_t tb = static_cast<uint8_t>(to & 0xFF);
+    const auto mix = [t](uint8_t a, uint8_t b) -> uint8_t {
+        return static_cast<uint8_t>(std::lround(static_cast<float>(a) + (static_cast<float>(b) - static_cast<float>(a)) * t));
+    };
+    return (static_cast<uint32_t>(mix(fr, tr)) << 16) |
+           (static_cast<uint32_t>(mix(fg, tg)) << 8) |
+           static_cast<uint32_t>(mix(fb, tb));
+}
+
+uint32_t quota_semantic_color(float fraction)
+{
+    const float value = clamp01(fraction);
+    if (value < 0.34f) {
+        return blend_color(0xFF4A3A, kOwAmber, value / 0.34f);
+    }
+    if (value < 0.68f) {
+        return blend_color(kOwAmber, 0xBDEB38, (value - 0.34f) / 0.34f);
+    }
+    return blend_color(0xBDEB38, kOwGreen, (value - 0.68f) / 0.32f);
 }
 
 template <size_t N>
@@ -146,12 +239,14 @@ const char* pick_idle_phrase(uint32_t salt)
 
 }  // namespace
 
-void CodexView::init(lv_obj_t* parent)
+void CodexView::init(lv_obj_t* parent, ThemeMode themeMode)
 {
+    _theme_mode = themeMode;
     lv_obj_remove_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_bg_color(parent, lv_color_hex(0x000000), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(parent,
+                              lv_color_hex(_theme_mode == ThemeMode::OpenWatcherV2 ? kOwBackground : 0x000000),
+                              LV_PART_MAIN);
 
-    _state.fiveHour = {1.0f, 1.0f, "--"};
     _state.weekly   = {1.0f, 1.0f, "--"};
     _state.message  = "Waiting...";
 
@@ -161,16 +256,17 @@ void CodexView::init(lv_obj_t* parent)
     _panel->setRadius(0);
     _panel->setBorderWidth(0);
     _panel->setPaddingAll(0);
-    _panel->setBgColor(lv_color_hex(0x000000));
+    _panel->setBgColor(lv_color_hex(_theme_mode == ThemeMode::OpenWatcherV2 ? kOwBackground : 0x000000));
     _panel->setBgOpa(LV_OPA_COVER);
     _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
 
-    initFlipClock();
-
-    initQuotaBar(_bar_5h, "5H", _state.fiveHour.resetInLabel.c_str(), true, lv_color_hex(kColor5h));
-    initQuotaBar(_bar_week, "WEEK", _state.weekly.resetInLabel.c_str(), false, lv_color_hex(kColorWeek));
-
-    initPet();
+    if (_theme_mode == ThemeMode::OpenWatcherV2) {
+        initOpenWatcherV2();
+    } else {
+        initFlipClock();
+        initSemicircleQuota();
+        initPet();
+    }
 
     _message_label = std::make_unique<Label>(_panel->get());
     _message_label->setText(_state.message.c_str());
@@ -179,43 +275,58 @@ void CodexView::init(lv_obj_t* parent)
     _message_label->setWidth(260);
     _message_label->setLongMode(LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
     _message_label->setTextAlign(LV_TEXT_ALIGN_CENTER);
-    _message_label->align(LV_ALIGN_TOP_MID, 0, 327);
+    _message_label->align(LV_ALIGN_TOP_MID, 0, _theme_mode == ThemeMode::OpenWatcherV2 ? 276 : 327);
 
     _message_image = std::make_unique<Image>(_panel->get());
     _message_image->setSrc(&codex_pet_msg_idle_0);
-    _message_image->align(LV_ALIGN_TOP_MID, 0, 323);
-    _message_image->setHidden(false);
+    _message_image->align(LV_ALIGN_TOP_MID, 0, _theme_mode == ThemeMode::OpenWatcherV2 ? 272 : 323);
+    _message_image->setHidden(_theme_mode == ThemeMode::OpenWatcherV2);
     _message_image->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
-    _message_image_active = true;
+    _message_image_active = _theme_mode != ThemeMode::OpenWatcherV2;
     if (_message_label) {
-        _message_label->setHidden(true);
+        _message_label->setHidden(_theme_mode != ThemeMode::OpenWatcherV2);
     }
 
     initVoiceWaveform();
 
     _ble_dot = std::make_unique<Container>(_panel->get());
-    _ble_dot->setSize(10, 10);
+    _ble_dot->setSize(8, 8);
     _ble_dot->setRadius(LV_RADIUS_CIRCLE);
     _ble_dot->setBorderWidth(0);
     _ble_dot->setBgColor(lv_color_hex(0x2F79FF));
-    _ble_dot->align(LV_ALIGN_BOTTOM_MID, -12, -34);
+    _ble_dot->align(_theme_mode == ThemeMode::OpenWatcherV2 ? LV_ALIGN_BOTTOM_MID : LV_ALIGN_TOP_MID,
+                    -7,
+                    _theme_mode == ThemeMode::OpenWatcherV2 ? -34 : 71);
 
     _wifi_dot = std::make_unique<Container>(_panel->get());
-    _wifi_dot->setSize(10, 10);
+    _wifi_dot->setSize(8, 8);
     _wifi_dot->setRadius(LV_RADIUS_CIRCLE);
     _wifi_dot->setBorderWidth(0);
     _wifi_dot->setBgColor(lv_color_hex(0x38E07D));
-    _wifi_dot->align(LV_ALIGN_BOTTOM_MID, 12, -34);
+    _wifi_dot->align(_theme_mode == ThemeMode::OpenWatcherV2 ? LV_ALIGN_BOTTOM_MID : LV_ALIGN_TOP_MID,
+                     7,
+                     _theme_mode == ThemeMode::OpenWatcherV2 ? -34 : 71);
 
     updateConnectionDots();
-    updateQuotaBar(_bar_5h, _state.fiveHour, true, lv_color_hex(kColor5h), "5H");
-    updateQuotaBar(_bar_week, _state.weekly, false, lv_color_hex(kColorWeek), "WEEK");
+    if (_theme_mode == ThemeMode::OpenWatcherV2) {
+        updateV2QuotaRing(_v2_week_ring, _state.weekly, "WEEK");
+        updateOpenWatcherV2Labels();
+    } else {
+        updateSemicircleQuota();
+    }
     GetHAL().updateImuData();
 }
 
 void CodexView::update()
 {
-    updateFlipClock();
+    if (_theme_mode == ThemeMode::OpenWatcherV2) {
+        updateOpenWatcherV2Labels();
+        if (_v2_canvas) {
+            lv_obj_invalidate(_v2_canvas->get());
+        }
+    } else {
+        updateFlipClock();
+    }
 
     const uint32_t now = GetHAL().millis();
     if (_state.messageExpiresAtMs != 0 && now > _state.messageExpiresAtMs) {
@@ -234,53 +345,86 @@ void CodexView::update()
 
     updateMotionInput();
 
-    const bool pet_active = _voice_mode != VoiceMode::Idle ||
-                            _state.processing ||
-                            _pet_pressed ||
-                            _pet_anim != PetAnim::Idle ||
-                            now < _pet_effect_until_tick ||
-                            _shake_energy > 0.0f;
-    const uint32_t pet_frame_ms = pet_active ? kPetActiveFrameMs : kPetIdleFrameMs;
-    if (_last_pet_update_tick == 0 || now - _last_pet_update_tick >= pet_frame_ms || _pet_pressed) {
-        _last_pet_update_tick = now;
-        updatePet();
+    if (_theme_mode != ThemeMode::OpenWatcherV2) {
+        const bool pet_active = _voice_mode != VoiceMode::Idle ||
+                                _state.processing ||
+                                _pet_pressed ||
+                                _pet_anim != PetAnim::Idle ||
+                                now < _pet_effect_until_tick ||
+                                _shake_energy > 0.0f;
+        const uint32_t pet_frame_ms = pet_active ? kPetActiveFrameMs : kPetIdleFrameMs;
+        if (_last_pet_update_tick == 0 || now - _last_pet_update_tick >= pet_frame_ms || _pet_pressed) {
+            _last_pet_update_tick = now;
+            updatePet();
+        }
     }
     updateVoiceWaveform();
 }
 
-void CodexView::applyQuota(int fiveHourLeftPct,
-                           int weeklyLeftPct,
-                           const std::string& fiveHourResetLabel,
+void CodexView::applyQuota(int weeklyLeftPct,
                            const std::string& weeklyResetLabel,
                            bool valid,
                            bool wifiConnected,
                            bool processing,
                            const std::string& message)
 {
-    _state.wifiConnected = wifiConnected;
-    _state.processing = processing;
+    codex::QuotaSnapshot snapshot;
+    snapshot.weeklyLeftPct = weeklyLeftPct;
+    snapshot.weeklyUsage = weeklyResetLabel;
+    snapshot.valid = valid;
+    snapshot.wifiConnected = wifiConnected;
+    snapshot.processing = processing;
+    snapshot.message = message;
+    applySnapshot(snapshot);
+}
+
+void CodexView::applySnapshot(const codex::QuotaSnapshot& snapshot)
+{
+    _state.wifiConnected = snapshot.wifiConnected;
+    _state.processing = snapshot.processing;
+    _state.source = snapshot.source;
+    _state.updatedAt = snapshot.updatedAt;
+    _state.stale = snapshot.stale || snapshot.cached;
+    _state.hostName = snapshot.hostName;
+    _state.sessionTitle = snapshot.sessionTitle.empty() ? "Codex Ready" : snapshot.sessionTitle;
+    _state.contextLabel = snapshot.contextLabel.empty() ? "-- / --" : snapshot.contextLabel;
+    _state.contextPressurePct = std::clamp(snapshot.contextPressurePct, 0, 100);
+    _state.compactThresholdPct = snapshot.compactThresholdPct;
+    _state.compactWarning = snapshot.compactWarning;
+    _state.totalTokensLabel = snapshot.totalTokensLabel.empty() ? "--" : snapshot.totalTokensLabel;
+    _state.modelLabel = snapshot.modelLabel.empty() ? "--" : snapshot.modelLabel;
+    _state.reasoningLabel = snapshot.reasoningLabel.empty() ? "--" : snapshot.reasoningLabel;
+    _state.activityLabel = snapshot.activityLabel.empty() ? "--" : snapshot.activityLabel;
+    _state.activityLive = snapshot.activityLive;
+    _state.activityBuckets = snapshot.activityBuckets;
+    _state.weeklyDayStartLeftPct = snapshot.weeklyDayStartLeftPct;
+    _state.weeklySegmentStartLeftPct = snapshot.weeklySegmentStartLeftPct;
+    _state.weeklyTodayUsedPctPoints = snapshot.weeklyTodayUsedPctPoints;
+    _state.weeklyResetCount = snapshot.weeklyResetCount;
+    _state.weeklyTrackingPeriodStart = snapshot.weeklyTrackingPeriodStart;
     _last_quota_update_tick = GetHAL().millis();
 
-    if (valid) {
-        _state.fiveHour.used = 100.0f - static_cast<float>(std::clamp(fiveHourLeftPct, 0, 100));
-        _state.fiveHour.limit = 100.0f;
-        _state.fiveHour.resetInLabel = fiveHourResetLabel.empty() ? "--" : fiveHourResetLabel;
-        _state.weekly.used = 100.0f - static_cast<float>(std::clamp(weeklyLeftPct, 0, 100));
+    if (snapshot.valid) {
+        _state.weekly.used = 100.0f - static_cast<float>(std::clamp(snapshot.weeklyLeftPct, 0, 100));
         _state.weekly.limit = 100.0f;
-        _state.weekly.resetInLabel = weeklyResetLabel.empty() ? "--" : weeklyResetLabel;
+        _state.weekly.resetInLabel = snapshot.weeklyUsage.empty() ? "--" : snapshot.weeklyUsage;
     } else {
-        _state.fiveHour.used = 100.0f;
-        _state.fiveHour.limit = 100.0f;
-        _state.fiveHour.resetInLabel = "--";
         _state.weekly.used = 100.0f;
         _state.weekly.limit = 100.0f;
         _state.weekly.resetInLabel = "--";
     }
 
     updateConnectionDots();
-    updateQuotaBar(_bar_5h, _state.fiveHour, true, lv_color_hex(kColor5h), "5H");
-    updateQuotaBar(_bar_week, _state.weekly, false, lv_color_hex(kColorWeek), "WEEK");
-    setMessageText(message);
+    if (_theme_mode == ThemeMode::OpenWatcherV2) {
+        updateV2QuotaRing(_v2_week_ring, _state.weekly, "WEEK");
+        updateOpenWatcherV2Labels();
+        if (_v2_canvas) {
+            lv_obj_invalidate(_v2_canvas->get());
+        }
+    } else {
+        updateSemicircleQuota();
+    }
+    setMessageText(snapshot.message);
     if (_state.processing) {
         setMessageImage(pick_processing_asset(++_message_phrase_counter + GetHAL().millis()), 2400);
     }
@@ -291,6 +435,7 @@ void CodexView::applyBleState(bool connected, const std::string& hostMessage, bo
     if (_state.bleConnected != connected) {
         _state.bleConnected = connected;
         updateConnectionDots();
+        updateOpenWatcherV2Labels();
     }
 
     if (hostMessageChanged && !hostMessage.empty()) {
@@ -353,6 +498,10 @@ void CodexView::setVoiceMode(VoiceMode mode)
     }
     if (_message_image) {
         _message_image->setHidden(visible || !_message_image_active);
+    }
+    updateOpenWatcherV2Labels();
+    if (_theme_mode == ThemeMode::OpenWatcherV2 && _v2_canvas) {
+        lv_obj_invalidate(_v2_canvas->get());
     }
 }
 
@@ -423,106 +572,499 @@ void CodexView::updateFlipClock(bool force)
     }
 }
 
-void CodexView::initQuotaBar(EdgeQuotaBar& bar,
-                             const char* title,
-                             const char* resetLabel,
-                             bool leftSide,
-                             lv_color_t color)
+void CodexView::initSemicircleQuota()
 {
-    const int x = leftSide ? 0 : 352;
+    _semicircle_quota.canvas = std::make_unique<Container>(_panel->get());
+    _semicircle_quota.canvas->setSize(kScreenSize, kScreenSize);
+    _semicircle_quota.canvas->align(LV_ALIGN_CENTER, 0, 0);
+    _semicircle_quota.canvas->setBgOpa(LV_OPA_TRANSP);
+    _semicircle_quota.canvas->setBorderWidth(0);
+    _semicircle_quota.canvas->setPaddingAll(0);
+    _semicircle_quota.canvas->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+    _semicircle_quota.canvas->removeFlag(LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(_semicircle_quota.canvas->get(),
+                        &CodexView::drawSemicircleQuotaEvent,
+                        LV_EVENT_DRAW_MAIN_BEGIN,
+                        this);
 
-    bar.trackImage = std::make_unique<Image>(_panel->get());
-    bar.trackImage->setSrc(leftSide ? static_cast<const void*>(&codex_quota_left_track)
-                                    : static_cast<const void*>(&codex_quota_right_track));
-    bar.trackImage->align(LV_ALIGN_TOP_LEFT, x, 56);
-    bar.trackImage->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+    auto setup_caption = [](Label& label, const char* text, uint32_t color, int x) {
+        label.setText(text);
+        label.setTextFont(&lv_font_montserrat_18);
+        label.setTextColor(lv_color_hex(color));
+        label.setWidth(kQuotaEndpointLabelWidth);
+        label.setTextAlign(LV_TEXT_ALIGN_CENTER);
+        label.align(LV_ALIGN_TOP_LEFT, x, kQuotaCaptionY);
+    };
 
-    bar.fillClip = std::make_unique<Container>(_panel->get());
-    bar.fillClip->setSize(118, 1);
-    bar.fillClip->align(LV_ALIGN_TOP_LEFT, x, 56);
-    bar.fillClip->setBgOpa(LV_OPA_TRANSP);
-    bar.fillClip->setBorderWidth(0);
-    bar.fillClip->setPaddingAll(0);
-    bar.fillClip->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+    auto setup_value = [](Label& label, uint32_t color, int x) {
+        label.setText("--%");
+        label.setTextFont(&MontserratSemiBold26);
+        label.setTextColor(lv_color_hex(color));
+        label.setWidth(kQuotaEndpointLabelWidth);
+        label.setTextAlign(LV_TEXT_ALIGN_CENTER);
+        label.align(LV_ALIGN_TOP_LEFT, x, kQuotaValueY);
+    };
 
-    bar.fillImage = std::make_unique<Image>(bar.fillClip->get());
-    bar.fillImage->setSrc(leftSide ? static_cast<const void*>(&codex_quota_left_fill)
-                                   : static_cast<const void*>(&codex_quota_right_fill));
-    bar.fillImage->align(LV_ALIGN_TOP_LEFT, 0, 0);
-    bar.fillImage->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+    _semicircle_quota.todayCaption = std::make_unique<Label>(_panel->get());
+    setup_caption(*_semicircle_quota.todayCaption, "TODAY", kColorTodayText, kQuotaLeftLabelX);
+    _semicircle_quota.todayValue = std::make_unique<Label>(_panel->get());
+    setup_value(*_semicircle_quota.todayValue, kColorTodayText, kQuotaLeftLabelX);
 
-    bar.percentLabel = std::make_unique<Label>(_panel->get());
-    bar.percentLabel->setText("--%");
-    bar.percentLabel->setTextFont(&MontserratSemiBold26);
-    bar.percentLabel->setTextColor(color);
-    bar.percentLabel->setWidth(86);
-    bar.percentLabel->setTextAlign(LV_TEXT_ALIGN_CENTER);
-    bar.percentLabel->align(LV_ALIGN_TOP_LEFT, leftSide ? 104 : 276, 84);
+    _semicircle_quota.remainingCaption = std::make_unique<Label>(_panel->get());
+    setup_caption(*_semicircle_quota.remainingCaption, "LEFT", kColorWeekText, kQuotaRightLabelX);
+    _semicircle_quota.remainingValue = std::make_unique<Label>(_panel->get());
+    setup_value(*_semicircle_quota.remainingValue, kColorWeekText, kQuotaRightLabelX);
 
-    bar.title = std::make_unique<Label>(_panel->get());
-    bar.title->setText(title);
-    bar.title->setTextFont(&MontserratSemiBold26);
-    bar.title->setTextColor(color);
-    bar.title->setWidth(96);
-    bar.title->setTextAlign(LV_TEXT_ALIGN_CENTER);
-    bar.title->align(LV_ALIGN_TOP_LEFT, leftSide ? 47 : 322, 191);
-
-    bar.underline = std::make_unique<Container>(_panel->get());
-    bar.underline->setSize(54, 2);
-    bar.underline->setRadius(2);
-    bar.underline->setBorderWidth(0);
-    bar.underline->setBgColor(color);
-    bar.underline->align(LV_ALIGN_TOP_LEFT, leftSide ? 70 : 345, 230);
-
-    bar.resetLabel = std::make_unique<Label>(_panel->get());
-    bar.resetLabel->setText(resetLabel);
-    bar.resetLabel->setTextFont(&lv_font_montserrat_22);
-    bar.resetLabel->setTextColor(lv_color_hex(kColorTextDim));
-    bar.resetLabel->setWidth(116);
-    bar.resetLabel->setTextAlign(LV_TEXT_ALIGN_CENTER);
-    bar.resetLabel->align(LV_ALIGN_TOP_LEFT, leftSide ? 37 : 312, 245);
+    _semicircle_quota.resetLabel = std::make_unique<Label>(_panel->get());
+    _semicircle_quota.resetLabel->setText("--");
+    _semicircle_quota.resetLabel->setTextFont(&lv_font_montserrat_22);
+    _semicircle_quota.resetLabel->setTextColor(lv_color_hex(kColorTextDim));
+    _semicircle_quota.resetLabel->setWidth(130);
+    _semicircle_quota.resetLabel->setTextAlign(LV_TEXT_ALIGN_CENTER);
+    _semicircle_quota.resetLabel->align(LV_ALIGN_TOP_LEFT, 168, 394);
 }
 
-void CodexView::drawQuotaBar(EdgeQuotaBar& bar, bool leftSide, lv_color_t color, float remaining)
+void CodexView::updateSemicircleQuota()
 {
-    if (!bar.fillClip || !bar.fillImage) {
+    const int remaining = static_cast<int>(std::lround(remainingRatio(_state.weekly) * 100.0f));
+    const bool has_daily_baseline = _state.weeklyDayStartLeftPct >= 0;
+    const int today_used = std::max(0, _state.weeklyTodayUsedPctPoints);
+
+    if (_semicircle_quota.remainingValue) {
+        char value[8];
+        std::snprintf(value, sizeof(value), "%d%%", remaining);
+        _semicircle_quota.remainingValue->setText(value);
+    }
+    if (_semicircle_quota.todayValue) {
+        char value[16];
+        if (has_daily_baseline) {
+            std::snprintf(value, sizeof(value), "%d%%", today_used);
+        } else {
+            std::snprintf(value, sizeof(value), "--%%");
+        }
+        _semicircle_quota.todayValue->setText(value);
+    }
+    if (_semicircle_quota.resetLabel) {
+        _semicircle_quota.resetLabel->setText(_state.weekly.resetInLabel.c_str());
+    }
+    if (_semicircle_quota.canvas) {
+        lv_obj_invalidate(_semicircle_quota.canvas->get());
+    }
+}
+
+void CodexView::drawSemicircleQuotaEvent(lv_event_t* event)
+{
+    auto* view = static_cast<CodexView*>(lv_event_get_user_data(event));
+    if (view == nullptr || lv_event_get_code(event) != LV_EVENT_DRAW_MAIN_BEGIN) {
         return;
     }
 
-    constexpr int imageW = 118;
-    constexpr int imageH = 330;
-    const float remainingClamped = clamp01(remaining);
-    const int visibleH = static_cast<int>(std::lround(imageH * remainingClamped));
-    const int hiddenTop = imageH - visibleH;
-
-    bar.fillClip->setSize(imageW, std::max(1, visibleH));
-    bar.fillClip->align(LV_ALIGN_TOP_LEFT, leftSide ? 0 : 352, 56 + hiddenTop);
-    bar.fillClip->setHidden(visibleH <= 0);
-    bar.fillImage->align(LV_ALIGN_TOP_LEFT, 0, -hiddenTop);
+    lv_obj_t* obj = lv_event_get_target_obj(event);
+    lv_layer_t* layer = lv_event_get_layer(event);
+    lv_area_t coords;
+    lv_obj_get_coords(obj, &coords);
+    view->drawSemicircleQuota(layer, coords);
 }
 
-void CodexView::updateQuotaBar(EdgeQuotaBar& bar,
-                               const QuotaSlot& slot,
-                               bool leftSide,
-                               lv_color_t color,
-                               const char* title)
+void CodexView::drawSemicircleQuota(lv_layer_t* layer, const lv_area_t& coords)
 {
-    if (bar.title) {
-        bar.title->setText(title);
-    }
-    if (bar.resetLabel) {
-        bar.resetLabel->setText(slot.resetInLabel.c_str());
+    const float remaining = remainingRatio(_state.weekly);
+    const float today = _state.weeklyDayStartLeftPct >= 0
+        ? clamp01(static_cast<float>(_state.weeklyTodayUsedPctPoints) / 100.0f)
+        : 0.0f;
+    const float today_end = std::min(1.0f, remaining + today);
+
+    lv_draw_arc_dsc_t arc;
+    lv_draw_arc_dsc_init(&arc);
+    arc.center = {
+        static_cast<lv_coord_t>(coords.x1 + kScreenCenter),
+        static_cast<lv_coord_t>(coords.y1 + kScreenCenter),
+    };
+    arc.radius = kQuotaRadius;
+    arc.width = kQuotaWidth;
+    arc.rounded = 1;
+    arc.start_angle = 0;
+    arc.end_angle = 180;
+    arc.color = lv_color_hex(kColorTrack);
+    arc.opa = 230;
+    lv_draw_arc(layer, &arc);
+
+    const int remaining_end_angle = static_cast<int>(std::lround(180.0f * remaining));
+    if (remaining_end_angle > 0) {
+        arc.start_angle = 0;
+        arc.end_angle = remaining_end_angle;
+        arc.color = lv_color_hex(kColorWeek);
+        arc.opa = 245;
+        lv_draw_arc(layer, &arc);
     }
 
+    const int today_end_angle = static_cast<int>(std::lround(180.0f * today_end));
+    if (today_end_angle > remaining_end_angle) {
+        arc.start_angle = remaining_end_angle;
+        arc.end_angle = today_end_angle;
+        arc.color = lv_color_hex(kColorToday);
+        arc.opa = 245;
+        lv_draw_arc(layer, &arc);
+    }
+
+    const auto draw_gradient_boundary = [&](int boundary_angle,
+                                            int left_available,
+                                            int right_available,
+                                            uint32_t left_color,
+                                            uint32_t right_color) {
+        const int half_angle = std::min({kQuotaGradientHalfAngle, left_available, right_available});
+        if (half_angle <= 0) {
+            return;
+        }
+
+        const int start_angle = boundary_angle - half_angle;
+        const int end_angle = boundary_angle + half_angle;
+        arc.rounded = 0;
+        arc.opa = 245;
+        for (int angle = start_angle; angle < end_angle; ++angle) {
+            const float mix = static_cast<float>(angle - start_angle) /
+                              static_cast<float>(end_angle - start_angle);
+            arc.start_angle = angle;
+            arc.end_angle = angle + 1;
+            arc.color = lv_color_hex(blendRgb(left_color, right_color, mix));
+            lv_draw_arc(layer, &arc);
+        }
+    };
+
+    const bool has_today_segment = today_end_angle > remaining_end_angle;
+    const int next_boundary = has_today_segment ? today_end_angle : 180;
+    draw_gradient_boundary(remaining_end_angle,
+                           remaining_end_angle,
+                           next_boundary - remaining_end_angle,
+                           kColorWeek,
+                           has_today_segment ? kColorToday : kColorTrack);
+
+    if (has_today_segment && today_end_angle < 180) {
+        draw_gradient_boundary(today_end_angle,
+                               today_end_angle - remaining_end_angle,
+                               180 - today_end_angle,
+                               kColorToday,
+                               kColorTrack);
+    }
+}
+
+void CodexView::initOpenWatcherV2()
+{
+    _v2_canvas = std::make_unique<Container>(_panel->get());
+    _v2_canvas->setSize(466, 466);
+    _v2_canvas->align(LV_ALIGN_CENTER, 0, 0);
+    _v2_canvas->setBgOpa(LV_OPA_TRANSP);
+    _v2_canvas->setBorderWidth(0);
+    _v2_canvas->setPaddingAll(0);
+    _v2_canvas->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(_v2_canvas->get(), &CodexView::drawOpenWatcherV2Event, LV_EVENT_DRAW_MAIN_BEGIN, this);
+
+    _v2_title_label = std::make_unique<Label>(_panel->get());
+    _v2_title_label->setText("CODEX READY");
+    _v2_title_label->setTextFont(&lv_font_montserrat_22);
+    _v2_title_label->setTextColor(lv_color_hex(kOwBlue));
+    _v2_title_label->setWidth(280);
+    _v2_title_label->setTextAlign(LV_TEXT_ALIGN_CENTER);
+    _v2_title_label->setLongMode(LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+    _v2_title_label->align(LV_ALIGN_TOP_MID, 0, 28);
+
+    _v2_context_label = std::make_unique<Label>(_panel->get());
+    _v2_context_label->setText("--");
+    _v2_context_label->setTextFont(&MontserratSemiBold26);
+    _v2_context_label->setTextColor(lv_color_hex(0xFFFFFF));
+    _v2_context_label->setWidth(260);
+    _v2_context_label->setTextAlign(LV_TEXT_ALIGN_CENTER);
+    _v2_context_label->align(LV_ALIGN_TOP_MID, 0, 68);
+
+    _v2_status_label = std::make_unique<Label>(_panel->get());
+    _v2_status_label->setText("READY");
+    _v2_status_label->setTextFont(&lv_font_montserrat_22);
+    _v2_status_label->setTextColor(lv_color_hex(kOwBlue));
+    _v2_status_label->setWidth(180);
+    _v2_status_label->setTextAlign(LV_TEXT_ALIGN_CENTER);
+    _v2_status_label->align(LV_ALIGN_TOP_MID, 0, 101);
+
+    _v2_meta_left_label = std::make_unique<Label>(_panel->get());
+    _v2_meta_left_label->setText("BLE --");
+    _v2_meta_left_label->setTextFont(&lv_font_montserrat_22);
+    _v2_meta_left_label->setTextColor(lv_color_hex(kOwSoftText));
+    _v2_meta_left_label->setWidth(150);
+    _v2_meta_left_label->setTextAlign(LV_TEXT_ALIGN_LEFT);
+    _v2_meta_left_label->align(LV_ALIGN_TOP_LEFT, 78, 112);
+
+    _v2_meta_right_label = std::make_unique<Label>(_panel->get());
+    _v2_meta_right_label->setText("WIFI --");
+    _v2_meta_right_label->setTextFont(&lv_font_montserrat_22);
+    _v2_meta_right_label->setTextColor(lv_color_hex(kOwSoftText));
+    _v2_meta_right_label->setWidth(150);
+    _v2_meta_right_label->setTextAlign(LV_TEXT_ALIGN_RIGHT);
+    _v2_meta_right_label->align(LV_ALIGN_TOP_RIGHT, -78, 112);
+
+    initV2QuotaRing(_v2_week_ring, "WEEK", lv_color_hex(0x7C66FF), 233, 374);
+}
+
+void CodexView::initV2QuotaRing(V2QuotaRing& ring,
+                                const char* title,
+                                lv_color_t color,
+                                int centerX,
+                                int centerY)
+{
+    ring.percentLabel = std::make_unique<Label>(_panel->get());
+    ring.percentLabel->setText("--%");
+    ring.percentLabel->setTextFont(&MontserratSemiBold26);
+    ring.percentLabel->setTextColor(color);
+    ring.percentLabel->setWidth(82);
+    ring.percentLabel->setTextAlign(LV_TEXT_ALIGN_CENTER);
+    ring.percentLabel->align(LV_ALIGN_TOP_LEFT, centerX - 41, centerY - 28);
+
+    ring.resetLabel = std::make_unique<Label>(_panel->get());
+    ring.resetLabel->setText("--");
+    ring.resetLabel->setTextFont(&lv_font_montserrat_22);
+    ring.resetLabel->setTextColor(lv_color_hex(kOwSoftText));
+    ring.resetLabel->setWidth(92);
+    ring.resetLabel->setTextAlign(LV_TEXT_ALIGN_CENTER);
+    ring.resetLabel->align(LV_ALIGN_TOP_LEFT, centerX - 46, centerY + 2);
+
+    ring.titleLabel = std::make_unique<Label>(_panel->get());
+    ring.titleLabel->setText(title);
+    ring.titleLabel->setTextFont(&lv_font_montserrat_22);
+    ring.titleLabel->setTextColor(lv_color_hex(kOwSoftText));
+    ring.titleLabel->setWidth(74);
+    ring.titleLabel->setTextAlign(LV_TEXT_ALIGN_CENTER);
+    ring.titleLabel->align(LV_ALIGN_TOP_LEFT, centerX - 37, centerY + 34);
+}
+
+void CodexView::updateV2QuotaRing(V2QuotaRing& ring, const QuotaSlot& slot, const char* title)
+{
     const float ratio = remainingRatio(slot);
-    if (bar.percentLabel) {
+    if (ring.percentLabel) {
         char pct[8];
         std::snprintf(pct, sizeof(pct), "%d%%", static_cast<int>(std::lround(ratio * 100.0f)));
-        bar.percentLabel->setText(pct);
+        ring.percentLabel->setText(pct);
     }
-    if (std::abs(ratio - bar.renderedRatio) > 0.005f) {
-        drawQuotaBar(bar, leftSide, color, ratio);
-        bar.renderedRatio = ratio;
+    if (ring.resetLabel) {
+        ring.resetLabel->setText(slot.resetInLabel.c_str());
+    }
+    if (ring.titleLabel) {
+        ring.titleLabel->setText(title);
+    }
+}
+
+void CodexView::updateOpenWatcherV2Labels()
+{
+    if (_theme_mode != ThemeMode::OpenWatcherV2) {
+        return;
+    }
+
+    const int week_pct = static_cast<int>(std::lround(remainingRatio(_state.weekly) * 100.0f));
+    if (_v2_title_label) {
+        _v2_title_label->setText(_state.sessionTitle.c_str());
+    }
+    if (_v2_context_label) {
+        const std::string context = _state.contextLabel.empty() || _state.contextLabel == "-- / --"
+            ? (std::to_string(100 - week_pct) + "% / WEEK")
+            : _state.contextLabel;
+        _v2_context_label->setText(context.c_str());
+    }
+    if (_v2_status_label) {
+        const bool recording = _voice_mode == VoiceMode::Recording;
+        const bool processing = _voice_mode == VoiceMode::Processing || _state.processing;
+        const char* text = _state.compactWarning ? "COMPACT SOON" : (recording ? "LISTENING" : (processing ? "PROCESSING" : "READY"));
+        const uint32_t color = _state.compactWarning ? kOwAmber : (recording ? kOwGreen : (processing ? kOwAmber : kOwBlue));
+        _v2_status_label->setText(text);
+        _v2_status_label->setTextColor(lv_color_hex(color));
+    }
+    if (_v2_meta_left_label) {
+        _v2_meta_left_label->setText((_state.modelLabel + " / " + _state.reasoningLabel).c_str());
+        _v2_meta_left_label->setTextColor(lv_color_hex(_state.bleConnected ? kOwBlue : kOwSoftText));
+    }
+    if (_v2_meta_right_label) {
+        const std::string activity = (_state.activityLive ? std::string("LIVE ") : std::string("")) + _state.activityLabel;
+        _v2_meta_right_label->setText(activity.c_str());
+        _v2_meta_right_label->setTextColor(lv_color_hex(_state.activityLive ? kOwGreen : kOwSoftText));
+    }
+}
+
+void CodexView::drawOpenWatcherV2Event(lv_event_t* event)
+{
+    auto* view = static_cast<CodexView*>(lv_event_get_user_data(event));
+    if (view == nullptr) {
+        return;
+    }
+    lv_event_code_t code = lv_event_get_code(event);
+    if (code != LV_EVENT_DRAW_MAIN_BEGIN) {
+        return;
+    }
+
+    lv_obj_t* obj = lv_event_get_target_obj(event);
+    lv_layer_t* layer = lv_event_get_layer(event);
+    lv_area_t coords;
+    lv_obj_get_coords(obj, &coords);
+    view->drawOpenWatcherV2(layer, coords);
+}
+
+void CodexView::drawOpenWatcherV2(lv_layer_t* layer, const lv_area_t& coords)
+{
+    const int width = coords.x2 - coords.x1 + 1;
+    const int height = coords.y2 - coords.y1 + 1;
+    const lv_point_t center = {
+        static_cast<lv_coord_t>(coords.x1 + width / 2),
+        static_cast<lv_coord_t>(coords.y1 + height / 2),
+    };
+
+    lv_draw_arc_dsc_t arc;
+    lv_draw_arc_dsc_init(&arc);
+    arc.center = center;
+    arc.rounded = 1;
+
+    const float week = remainingRatio(_state.weekly);
+    const float context = _state.contextPressurePct > 0
+        ? clamp01(1.0f - static_cast<float>(_state.contextPressurePct) / 100.0f)
+        : week;
+
+    arc.radius = 223;
+    arc.width = 7;
+    arc.color = lv_color_hex(kOwTrack);
+    arc.opa = 170;
+    arc.start_angle = 180;
+    arc.end_angle = 360;
+    lv_draw_arc(layer, &arc);
+
+    constexpr int kTopSegments = 36;
+    for (int i = 0; i < kTopSegments; ++i) {
+        const float start = static_cast<float>(i) / static_cast<float>(kTopSegments);
+        const float end = static_cast<float>(i + 1) / static_cast<float>(kTopSegments);
+        if (start >= context) {
+            break;
+        }
+        const float active_end = std::min(end, context);
+        const int start_deg = 180 + static_cast<int>(std::lround(180.0f * start));
+        const int end_deg = 180 + static_cast<int>(std::lround(180.0f * active_end)) - 1;
+        if (end_deg <= start_deg) {
+            continue;
+        }
+        arc.color = lv_color_hex(quota_semantic_color((start + active_end) * 0.5f));
+        arc.opa = 235;
+        arc.start_angle = start_deg;
+        arc.end_angle = end_deg;
+        lv_draw_arc(layer, &arc);
+    }
+
+    auto draw_ring = [&](int cx, int cy, float fraction, uint32_t accent) {
+        lv_draw_arc_dsc_t ring;
+        lv_draw_arc_dsc_init(&ring);
+        ring.center = {static_cast<lv_coord_t>(coords.x1 + cx), static_cast<lv_coord_t>(coords.y1 + cy)};
+        ring.radius = 52;
+        ring.width = 5;
+        ring.rounded = 1;
+        ring.color = lv_color_hex(kOwTrack);
+        ring.opa = 190;
+        ring.start_angle = 112;
+        ring.end_angle = 428;
+        lv_draw_arc(layer, &ring);
+
+        constexpr int kSegments = 56;
+        for (int i = 0; i < kSegments; ++i) {
+            const float start = static_cast<float>(i) / static_cast<float>(kSegments);
+            const float end = static_cast<float>(i + 1) / static_cast<float>(kSegments);
+            if (start >= fraction) {
+                break;
+            }
+            const float active_end = std::min(end, fraction);
+            const int start_deg = 112 + static_cast<int>(std::lround(316.0f * start));
+            const int end_deg = 112 + static_cast<int>(std::lround(316.0f * active_end)) - 1;
+            if (end_deg <= start_deg) {
+                continue;
+            }
+            ring.color = lv_color_hex(blend_color(accent, quota_semantic_color((start + active_end) * 0.5f), 0.28f));
+            ring.opa = 245;
+            ring.start_angle = start_deg;
+            ring.end_angle = end_deg;
+            lv_draw_arc(layer, &ring);
+        }
+
+        ring.radius = 43;
+        ring.width = 3;
+        ring.color = lv_color_hex(0x2B254D);
+        ring.opa = 180;
+        ring.start_angle = 112;
+        ring.end_angle = 428;
+        lv_draw_arc(layer, &ring);
+    };
+
+    draw_ring(233, 374, week, 0x7C66FF);
+
+    lv_draw_rect_dsc_t rect;
+    lv_draw_rect_dsc_init(&rect);
+    constexpr int kBars = 24;
+    const int bucket_x = coords.x1 + 76;
+    const int bucket_y = coords.y1 + 139;
+    const int bucket_w = 23;
+    const int bucket_h = 43;
+    const int bucket_gap = 4;
+    const int row_gap = 10;
+    const uint32_t now = GetHAL().millis();
+    bool has_real_activity = false;
+    for (float bucket : _state.activityBuckets) {
+        if (bucket > 0.001f) {
+            has_real_activity = true;
+            break;
+        }
+    }
+
+    lv_area_t bucket_back = {
+        static_cast<lv_coord_t>(coords.x1 + 58),
+        static_cast<lv_coord_t>(coords.y1 + 124),
+        static_cast<lv_coord_t>(coords.x1 + 408),
+        static_cast<lv_coord_t>(coords.y1 + 263),
+    };
+    rect.radius = 18;
+    rect.bg_color = lv_color_hex(kOwPanel);
+    rect.bg_opa = 132;
+    rect.border_width = 1;
+    rect.border_color = lv_color_hex(0x1F3248);
+    rect.border_opa = 130;
+    lv_draw_rect(layer, &rect, &bucket_back);
+
+    for (int i = 0; i < kBars; ++i) {
+        float activity = has_real_activity ? _state.activityBuckets[i] :
+            (0.18f + 0.38f * std::fabs(std::sin((static_cast<float>(i) * 0.42f) +
+                                                static_cast<float>((now / 900) % 100) * 0.08f)));
+        if (!has_real_activity) {
+            if (_voice_mode != VoiceMode::Idle || _state.processing) {
+                activity = std::min(1.0f, activity + 0.28f + 0.18f * std::sin(static_cast<float>(now % 600) / 600.0f * 6.283185f + i));
+            }
+        }
+
+        const int row = i / 12;
+        const int col = i % 12;
+        const int x = bucket_x + col * (bucket_w + bucket_gap);
+        const int y = bucket_y + row * (bucket_h + row_gap);
+        const int fill_h = std::max(4, static_cast<int>(std::lround((bucket_h - 8) * clamp01(activity))));
+        const int fill_y = y + bucket_h - 4 - fill_h;
+
+        lv_area_t area = {
+            static_cast<lv_coord_t>(x),
+            static_cast<lv_coord_t>(y),
+            static_cast<lv_coord_t>(x + bucket_w),
+            static_cast<lv_coord_t>(y + bucket_h),
+        };
+        rect.radius = 8;
+        rect.bg_color = lv_color_hex(0x142236);
+        rect.bg_opa = 185;
+        rect.border_width = 0;
+        lv_draw_rect(layer, &rect, &area);
+
+        lv_area_t fill_area = {
+            static_cast<lv_coord_t>(x + 4),
+            static_cast<lv_coord_t>(fill_y),
+            static_cast<lv_coord_t>(x + bucket_w - 4),
+            static_cast<lv_coord_t>(y + bucket_h - 4),
+        };
+        rect.radius = 5;
+        rect.bg_color = lv_color_hex(blend_color(kOwTeal, kOwBlue, static_cast<float>(i) / static_cast<float>(kBars - 1)));
+        rect.bg_opa = 92 + static_cast<lv_opa_t>(activity * 150.0f);
+        lv_draw_rect(layer, &rect, &fill_area);
     }
 }
 
@@ -569,7 +1111,8 @@ void CodexView::updatePet()
     const int shakeX    = static_cast<int>(std::sin(static_cast<float>(now % 220) / 220.0f * 6.283185f) * _shake_energy * 11.0f);
 
     if (_pet_hit_area) {
-        _pet_hit_area->align(LV_ALIGN_TOP_MID, tiltX + shakeX, 118 + yOffset + tiltY);
+        const int baseY = _theme_mode == ThemeMode::OpenWatcherV2 ? 124 : 118;
+        _pet_hit_area->align(LV_ALIGN_TOP_MID, tiltX + shakeX, baseY + yOffset + tiltY);
     }
     if (_pet_face) {
         _pet_face->align(LV_ALIGN_CENTER, -4 + static_cast<int>(_tilt_x * 4.0f),
@@ -762,7 +1305,7 @@ void CodexView::initVoiceWaveform()
 {
     _voice_waveform = std::make_unique<Container>(_panel->get());
     _voice_waveform->setSize(188, 42);
-    _voice_waveform->align(LV_ALIGN_TOP_MID, 0, 319);
+    _voice_waveform->align(LV_ALIGN_TOP_MID, 0, _theme_mode == ThemeMode::OpenWatcherV2 ? 278 : 319);
     _voice_waveform->setBgOpa(LV_OPA_TRANSP);
     _voice_waveform->setBorderWidth(0);
     _voice_waveform->setPaddingAll(0);
@@ -778,7 +1321,7 @@ void CodexView::initVoiceWaveform()
         bar->setSize(kBarWidth, 10);
         bar->setRadius(5);
         bar->setBorderWidth(0);
-        bar->setBgColor(i % 2 == 0 ? lv_color_hex(kColor5h) : lv_color_hex(kColorWeek));
+        bar->setBgColor(i % 2 == 0 ? lv_color_hex(kOwBlue) : lv_color_hex(kColorWeek));
         bar->setBgOpa(220);
         bar->setShadowWidth(8);
         bar->setShadowColor(lv_color_hex(0x386FFF));

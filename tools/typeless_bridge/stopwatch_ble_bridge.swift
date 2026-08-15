@@ -17,6 +17,7 @@ private let codexDeviceId = "m5stack-stopwatch"
 private let supportDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/M5StopWatch/StopWatchBleBridge")
 private let configFileURL = supportDirectoryURL.appendingPathComponent("config.json")
+private let quotaDailyStateFileURL = supportDirectoryURL.appendingPathComponent("codex-weekly-daily.json")
 private let logFileURL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Logs/stopwatch-ble-bridge.log")
 private let bridgeSettingsChangedNotification = Notification.Name("StopWatchBleBridgeSettingsChanged")
@@ -52,7 +53,7 @@ private let availableKeyBindings: [KeyBinding] = [
     KeyBinding(name: "Right Option", macKeyCode: UInt16(kVK_RightOption), hidKeyCode: 0xE6),
 ]
 
-private let availableShakeActions = ["Clear Input", "Escape", "Return", "None"]
+private let availableShakeActions = ["Clear Input", "Command+Return", "Escape", "Return", "None"]
 private let availableInputModes = ["Typeless", "WeChat IME"]
 
 private let inputModeTitles: [InputMode: String] = [
@@ -67,6 +68,7 @@ private let inputModeDescriptions: [InputMode: String] = [
 
 private let shakeActionTitles: [String: String] = [
     "Clear Input": "清空输入",
+    "Command+Return": "Codex 引导（⌘↩）",
     "Escape": "Esc",
     "Return": "回车",
     "None": "不处理"
@@ -179,6 +181,7 @@ private struct BridgeSettings: Codable, Equatable {
     var typelessRightKeyName: String = "Return"
     var wechatLeftKeyName: String = "Right Option"
     var wechatRightKeyName: String = "Return"
+    var confirmLongActionName: String = "Command+Return"
     var shakeActionName: String = "Clear Input"
     var customKeyBindings: [KeyBinding] = []
     var inputModeName: String = InputMode.typeless.rawValue
@@ -193,6 +196,7 @@ private struct BridgeSettings: Codable, Equatable {
         case typelessRightKeyName
         case wechatLeftKeyName
         case wechatRightKeyName
+        case confirmLongActionName
         case shakeActionName
         case customKeyBindings
         case inputModeName
@@ -211,6 +215,7 @@ private struct BridgeSettings: Codable, Equatable {
         typelessRightKeyName = try container.decodeIfPresent(String.self, forKey: .typelessRightKeyName) ?? rightKeyName
         wechatLeftKeyName = try container.decodeIfPresent(String.self, forKey: .wechatLeftKeyName) ?? "Right Option"
         wechatRightKeyName = try container.decodeIfPresent(String.self, forKey: .wechatRightKeyName) ?? "Return"
+        confirmLongActionName = try container.decodeIfPresent(String.self, forKey: .confirmLongActionName) ?? "Command+Return"
         shakeActionName = try container.decodeIfPresent(String.self, forKey: .shakeActionName) ?? "Clear Input"
         customKeyBindings = try container.decodeIfPresent([KeyBinding].self, forKey: .customKeyBindings) ?? []
         inputModeName = try container.decodeIfPresent(String.self, forKey: .inputModeName) ?? InputMode.typeless.rawValue
@@ -243,6 +248,12 @@ private struct BridgeSettings: Codable, Equatable {
         return keyBinding(named: keyName, fallback: "Escape", custom: customKeyBindings)
     }
 
+    var confirmLongKey: KeyBinding? {
+        guard confirmLongActionName.hasPrefix("Key:") else { return nil }
+        let keyName = String(confirmLongActionName.dropFirst(4))
+        return keyBinding(named: keyName, fallback: "Return", custom: customKeyBindings)
+    }
+
     var inputMode: InputMode {
         InputMode(rawValue: inputModeName) ?? .typeless
     }
@@ -267,6 +278,14 @@ private struct BridgeSettings: Codable, Equatable {
         }
         if !isKnownKeyBindingName(copy.wechatRightKeyName, custom: copy.customKeyBindings) {
             copy.wechatRightKeyName = "Return"
+        }
+        if copy.confirmLongActionName.hasPrefix("Key:") {
+            let keyName = String(copy.confirmLongActionName.dropFirst(4))
+            if !isKnownKeyBindingName(keyName, custom: copy.customKeyBindings) {
+                copy.confirmLongActionName = "Command+Return"
+            }
+        } else if !availableShakeActions.contains(copy.confirmLongActionName) {
+            copy.confirmLongActionName = "Command+Return"
         }
         if copy.shakeActionName.hasPrefix("Key:") {
             let keyName = String(copy.shakeActionName.dropFirst(4))
@@ -341,6 +360,41 @@ private final class BridgeStatusCenter {
         DispatchQueue.main.async { [weak self] in
             self?.appDelegate?.refreshMenu()
         }
+    }
+}
+
+private final class OpenWatcherHomeActivityTracker {
+    static let shared = OpenWatcherHomeActivityTracker()
+
+    private var events: [(date: Date, weight: Double, kind: String)] = []
+    private let lock = NSLock()
+
+    func record(_ kind: String, weight: Double = 1.0) {
+        lock.lock()
+        events.append((Date(), max(0.05, min(1.0, weight)), kind))
+        let cutoff = Date().addingTimeInterval(-2 * 60 * 60)
+        events.removeAll { $0.date < cutoff }
+        lock.unlock()
+    }
+
+    func buckets(count: Int = 24, windowSeconds: TimeInterval = 2 * 60 * 60) -> [Double] {
+        let now = Date()
+        let bucketSeconds = windowSeconds / Double(count)
+        var result = Array(repeating: 0.0, count: count)
+
+        lock.lock()
+        let snapshot = events
+        lock.unlock()
+
+        for event in snapshot {
+            let age = now.timeIntervalSince(event.date)
+            guard age >= 0, age < windowSeconds else { continue }
+            let reverseIndex = Int(age / bucketSeconds)
+            let index = count - 1 - reverseIndex
+            guard index >= 0, index < count else { continue }
+            result[index] = min(1.0, result[index] + event.weight)
+        }
+        return result.map { round($0 * 100) / 100 }
     }
 }
 
@@ -499,6 +553,16 @@ private func requestAccessibilityAccess() -> Bool {
 
 private func hidReportBinding(_ binding: KeyBinding) -> (modifier: UInt8, keycode: UInt8) {
     binding.name == "Right Option" ? (0x40, binding.hidKeyCode) : (0, binding.hidKeyCode)
+}
+
+private func hidActionBinding(_ action: String, customKey: KeyBinding?) -> (modifier: UInt8, keycode: UInt8) {
+    if action == "Command+Return" {
+        return (0x08, 0x28)
+    }
+    if let customKey {
+        return hidReportBinding(customKey)
+    }
+    return (0, 0)
 }
 
 private func parseOptions() -> Options {
@@ -827,6 +891,20 @@ private func leftPercent(from window: [String: Any]) -> Int? {
 }
 
 private func resetText(from window: [String: Any]) -> String {
+    // Prefer the server's relative value. It avoids local clock skew and is the
+    // field the official usage response updates for the selected quota window.
+    if let resetAfter = window["reset_after_seconds"] {
+        if let value = resetAfter as? Int {
+            return compactDuration(value)
+        }
+        if let value = resetAfter as? Double {
+            return compactDuration(Int(value))
+        }
+        if let value = resetAfter as? String, let seconds = Double(value) {
+            return compactDuration(Int(seconds))
+        }
+    }
+
     if let resetAt = window["reset_at"] {
         let timestamp: Double?
         if let value = resetAt as? Double {
@@ -840,18 +918,6 @@ private func resetText(from window: [String: Any]) -> String {
         }
         if let timestamp {
             return compactDuration(Int(max(0, timestamp - Date().timeIntervalSince1970)))
-        }
-    }
-
-    if let resetAfter = window["reset_after_seconds"] {
-        if let value = resetAfter as? Int {
-            return compactDuration(value)
-        }
-        if let value = resetAfter as? Double {
-            return compactDuration(Int(value))
-        }
-        if let value = resetAfter as? String, let seconds = Double(value) {
-            return compactDuration(Int(seconds))
         }
     }
     return "--"
@@ -914,6 +980,118 @@ private func fetchCodexUsage() throws -> [String: Any] {
     return try result!.get()
 }
 
+private struct DailyWeeklyQuotaState: Codable {
+    var dayKey: String
+    var periodStart: String
+    var dayStartLeftPct: Int
+    var segmentStartLeftPct: Int
+    var previousLeftPct: Int
+    var usedSinceStartPctPoints: Int
+    var resetCount: Int
+    var updatedAt: String
+
+    var payload: [String: Any] {
+        [
+            "boundary_hour_local": 8,
+            "day_key": dayKey,
+            "period_start": periodStart,
+            "day_start_left_pct": dayStartLeftPct,
+            "segment_start_left_pct": segmentStartLeftPct,
+            "current_left_pct": previousLeftPct,
+            "used_since_start_pct_points": usedSinceStartPctPoints,
+            "reset_count": resetCount,
+            "updated_at": updatedAt
+        ]
+    }
+}
+
+private final class DailyWeeklyQuotaTracker {
+    static let shared = DailyWeeklyQuotaTracker()
+
+    private let lock = NSLock()
+    private var state: DailyWeeklyQuotaState?
+
+    private init() {
+        state = load()
+    }
+
+    func update(weeklyLeftPct: Int, now: Date = Date()) -> DailyWeeklyQuotaState {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let left = max(0, min(100, weeklyLeftPct))
+        let periodStart = trackingPeriodStart(for: now)
+        let dayKey = trackingDayKey(for: periodStart)
+        let nowText = ISO8601DateFormatter().string(from: now)
+
+        if state?.dayKey != dayKey {
+            state = DailyWeeklyQuotaState(
+                dayKey: dayKey,
+                periodStart: ISO8601DateFormatter().string(from: periodStart),
+                dayStartLeftPct: left,
+                segmentStartLeftPct: left,
+                previousLeftPct: left,
+                usedSinceStartPctPoints: 0,
+                resetCount: 0,
+                updatedAt: nowText
+            )
+        } else if var current = state {
+            if left < current.previousLeftPct {
+                current.usedSinceStartPctPoints += current.previousLeftPct - left
+            } else if left > current.previousLeftPct {
+                current.resetCount += 1
+                current.segmentStartLeftPct = left
+            }
+            current.previousLeftPct = left
+            current.updatedAt = nowText
+            state = current
+        }
+
+        let result = state!
+        save(result)
+        return result
+    }
+
+    private func trackingPeriodStart(for now: Date) -> Date {
+        var calendar = Calendar.current
+        calendar.timeZone = .current
+        let startOfDay = calendar.startOfDay(for: now)
+        let todayBoundary = calendar.date(byAdding: .hour, value: 8, to: startOfDay) ?? startOfDay
+        if now >= todayBoundary {
+            return todayBoundary
+        }
+        return calendar.date(byAdding: .day, value: -1, to: todayBoundary) ?? todayBoundary
+    }
+
+    private func trackingDayKey(for periodStart: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar.current
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: periodStart)
+    }
+
+    private func load() -> DailyWeeklyQuotaState? {
+        do {
+            let data = try Data(contentsOf: quotaDailyStateFileURL)
+            return try JSONDecoder().decode(DailyWeeklyQuotaState.self, from: data)
+        } catch {
+            return nil
+        }
+    }
+
+    private func save(_ state: DailyWeeklyQuotaState) {
+        do {
+            try FileManager.default.createDirectory(at: supportDirectoryURL, withIntermediateDirectories: true)
+            let data = try JSONEncoder().encode(state)
+            try data.write(to: quotaDailyStateFileURL, options: .atomic)
+        } catch {
+            log("daily weekly quota state save failed: \(error.localizedDescription)")
+        }
+    }
+}
+
 private func buildDevicePanel() throws -> Data {
     let raw = try fetchCodexUsage()
     let rateLimit = raw["rate_limit"] as? [String: Any] ?? raw
@@ -924,37 +1102,70 @@ private func buildDevicePanel() throws -> Data {
         else {
             continue
         }
-        if seconds == 18000 || seconds == 604800 {
+        if seconds == 604800 {
             windows[seconds] = item
         }
     }
 
-    let five = windows[18000] ?? [:]
     let weekly = windows[604800] ?? [:]
-    let fiveLeft = leftPercent(from: five)
     let weeklyLeft = leftPercent(from: weekly)
-    let valid = fiveLeft != nil && weeklyLeft != nil
+    let valid = weeklyLeft != nil
 
     let now = ISO8601DateFormatter().string(from: Date())
     let epoch = Int(Date().timeIntervalSince1970)
+    let weeklyRemaining = weeklyLeft ?? 0
+    let weeklyReset = resetText(from: weekly)
+    let dailyTracking = DailyWeeklyQuotaTracker.shared.update(weeklyLeftPct: weeklyRemaining)
+    let pressure = max(0, min(100, 100 - weeklyRemaining))
+    let activeState = BridgeStatusCenter.shared.typelessStatus
+    let sessionActive = activeState.lowercased().contains("record") ||
+        activeState.contains("录制") ||
+        activeState.lowercased().contains("processing") ||
+        activeState.contains("处理")
+    let openWatcherHome: [String: Any] = [
+        "version": 1,
+        "session_title": sessionActive ? "Typeless Voice" : "Codex Ready",
+        "context_label": "\(100 - weeklyRemaining)% / WEEK",
+        "context_pressure_pct": pressure,
+        "compact_threshold_pct": 82,
+        "compact_warning": pressure >= 82,
+        "total_tokens_label": "--",
+        "model_label": "Codex",
+        "reasoning_label": sessionActive ? "active" : "idle",
+        "activity_label": sessionActive ? "live" : "2h",
+        "activity_live": sessionActive,
+        "activity_window": "2h",
+        "activity_buckets": OpenWatcherHomeActivityTracker.shared.buckets()
+    ]
     let codex: [String: Any] = [
         "valid": valid,
         "status": valid ? "ok" : "invalid",
+        "source": "mac_bridge",
+        "updated_at": now,
+        "stale": false,
         "processing": false,
         "message": valid ? "Quota synced" : "Quota invalid",
-        "five_hour": [
-            "left_pct": fiveLeft ?? 0,
-            "used_pct": 100 - (fiveLeft ?? 0),
-            "reset_in": resetText(from: five),
-            "reset_at": ""
+        "host": [
+            "name": Host.current().localizedName ?? "Mac",
+            "app": "StopWatch BLE Bridge",
+            "connected": true
         ],
+        "session": [
+            "state": sessionActive ? "active" : "idle",
+            "active_title": sessionActive ? "Typeless Voice" : "",
+            "active_for_sec": 0,
+            "last_event": activeState.isEmpty ? "quota_sync" : activeState
+        ],
+        "openwatcher_home": openWatcherHome,
         "weekly": [
             "left_pct": weeklyLeft ?? 0,
             "used_pct": 100 - (weeklyLeft ?? 0),
-            "reset_in": resetText(from: weekly),
-            "reset_at": ""
+            "reset_in": weeklyReset,
+            "reset_at": weekly["reset_at"] ?? "",
+            "daily_tracking": dailyTracking.payload
         ]
     ]
+    log("quota weekly left=\(weeklyRemaining)% reset=\(weeklyReset) window=604800s")
     let panel: [String: Any] = [
         "version": 1,
         "device_id": codexDeviceId,
@@ -982,7 +1193,6 @@ private func buildDeviceTimePanel() throws -> Data {
             "status": "time_only",
             "processing": false,
             "message": "Bridge time synced",
-            "five_hour": ["left_pct": -1, "reset_in": "--"],
             "weekly": ["left_pct": -1, "reset_in": "--"]
         ],
         "pet": ["state": "idle", "message": "Bridge ready", "processing": false],
@@ -1028,9 +1238,11 @@ private final class SettingsWindowController: NSWindowController {
     private let inputModePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let leftPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let rightPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let confirmLongPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let shakePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let captureLeftButton = NSButton(title: "录入", target: nil, action: nil)
     private let captureRightButton = NSButton(title: "录入", target: nil, action: nil)
+    private let captureConfirmLongButton = NSButton(title: "录入", target: nil, action: nil)
     private let captureShakeButton = NSButton(title: "录入", target: nil, action: nil)
     private let quotaField = NSTextField(frame: .zero)
     private let quotaCheckbox = NSButton(checkboxWithTitle: "同步 Codex 额度（使用本机登录状态）", target: nil, action: nil)
@@ -1042,7 +1254,7 @@ private final class SettingsWindowController: NSWindowController {
     private var editingMode: InputMode = .typeless
 
     init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 470),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 530),
                               styleMask: [.titled, .closable],
                               backing: .buffered,
                               defer: false)
@@ -1064,15 +1276,15 @@ private final class SettingsWindowController: NSWindowController {
 
         let title = NSTextField(labelWithString: "M5 StopWatch 桥接")
         title.font = .boldSystemFont(ofSize: 20)
-        title.frame = NSRect(x: 28, y: 420, width: 360, height: 26)
+        title.frame = NSRect(x: 28, y: 480, width: 360, height: 26)
         content.addSubview(title)
 
         let subtitle = NSTextField(labelWithString: "切换输入法模式时，会自动恢复该模式保存过的按键绑定。")
         subtitle.textColor = .secondaryLabelColor
-        subtitle.frame = NSRect(x: 28, y: 394, width: 455, height: 20)
+        subtitle.frame = NSRect(x: 28, y: 454, width: 455, height: 20)
         content.addSubview(subtitle)
 
-        let modeBox = makeCard(frame: NSRect(x: 20, y: 294, width: 480, height: 86))
+        let modeBox = makeCard(frame: NSRect(x: 20, y: 354, width: 480, height: 86))
         content.addSubview(modeBox)
         addSectionTitle("输入模式", x: 20, y: 52, to: modeBox)
         populateModePopup()
@@ -1085,7 +1297,7 @@ private final class SettingsWindowController: NSWindowController {
         modeDescriptionLabel.frame = NSRect(x: 20, y: 18, width: 430, height: 18)
         modeBox.addSubview(modeDescriptionLabel)
 
-        let keyBox = makeCard(frame: NSRect(x: 20, y: 142, width: 480, height: 136))
+        let keyBox = makeCard(frame: NSRect(x: 20, y: 186, width: 480, height: 152))
         content.addSubview(keyBox)
         addSectionTitle("按键绑定", x: 20, y: 102, to: keyBox)
         addLabel("A 键", x: 20, y: 66, to: keyBox)
@@ -1111,38 +1323,47 @@ private final class SettingsWindowController: NSWindowController {
         leftHelpLabel.frame = NSRect(x: 304, y: 102, width: 145, height: 18)
         keyBox.addSubview(leftHelpLabel)
 
-        let behaviorBox = makeCard(frame: NSRect(x: 20, y: 32, width: 480, height: 94))
+        let behaviorBox = makeCard(frame: NSRect(x: 20, y: 46, width: 480, height: 124))
         content.addSubview(behaviorBox)
-        addSectionTitle("同步与动作", x: 20, y: 60, to: behaviorBox)
-        addLabel("摇晃动作", x: 20, y: 26, to: behaviorBox)
+        addSectionTitle("同步与动作", x: 20, y: 90, to: behaviorBox)
+        addLabel("B 键长按", x: 20, y: 56, to: behaviorBox)
+        populateActionPopup(confirmLongPopup)
+        confirmLongPopup.frame = NSRect(x: 154, y: 51, width: 154, height: 30)
+        behaviorBox.addSubview(confirmLongPopup)
+        captureConfirmLongButton.target = self
+        captureConfirmLongButton.action = #selector(captureConfirmLongKey)
+        captureConfirmLongButton.bezelStyle = .rounded
+        captureConfirmLongButton.frame = NSRect(x: 314, y: 51, width: 58, height: 30)
+        behaviorBox.addSubview(captureConfirmLongButton)
+        addLabel("摇晃动作", x: 20, y: 20, to: behaviorBox)
         populateShakePopup()
-        shakePopup.frame = NSRect(x: 154, y: 21, width: 154, height: 30)
+        shakePopup.frame = NSRect(x: 154, y: 15, width: 154, height: 30)
         behaviorBox.addSubview(shakePopup)
         captureShakeButton.target = self
         captureShakeButton.action = #selector(captureShakeKey)
         captureShakeButton.bezelStyle = .rounded
-        captureShakeButton.frame = NSRect(x: 314, y: 21, width: 58, height: 30)
+        captureShakeButton.frame = NSRect(x: 314, y: 15, width: 58, height: 30)
         behaviorBox.addSubview(captureShakeButton)
-        addLabel("额度刷新", x: 384, y: 26, to: behaviorBox)
+        addLabel("额度刷新", x: 384, y: 20, to: behaviorBox)
         quotaField.placeholderString = "300"
         quotaField.alignment = .right
-        quotaField.frame = NSRect(x: 432, y: 24, width: 34, height: 24)
+        quotaField.frame = NSRect(x: 432, y: 18, width: 34, height: 24)
         behaviorBox.addSubview(quotaField)
         let seconds = NSTextField(labelWithString: "秒")
         seconds.textColor = .secondaryLabelColor
-        seconds.frame = NSRect(x: 468, y: 26, width: 18, height: 20)
+        seconds.frame = NSRect(x: 468, y: 20, width: 18, height: 20)
         behaviorBox.addSubview(seconds)
 
-        quotaCheckbox.frame = NSRect(x: 28, y: 8, width: 250, height: 22)
+        quotaCheckbox.frame = NSRect(x: 28, y: 18, width: 250, height: 22)
         content.addSubview(quotaCheckbox)
 
-        syncTypelessCheckbox.frame = NSRect(x: 278, y: 8, width: 214, height: 22)
+        syncTypelessCheckbox.frame = NSRect(x: 278, y: 18, width: 214, height: 22)
         content.addSubview(syncTypelessCheckbox)
 
         let save = NSButton(title: "保存", target: self, action: #selector(saveSettings))
         save.bezelStyle = .rounded
         save.keyEquivalent = "\r"
-        save.frame = NSRect(x: 402, y: 420, width: 86, height: 30)
+        save.frame = NSRect(x: 402, y: 480, width: 86, height: 30)
         content.addSubview(save)
     }
 
@@ -1191,15 +1412,19 @@ private final class SettingsWindowController: NSWindowController {
     }
 
     private func populateShakePopup() {
-        shakePopup.removeAllItems()
+        populateActionPopup(shakePopup)
+    }
+
+    private func populateActionPopup(_ popup: NSPopUpButton) {
+        popup.removeAllItems()
         for action in availableShakeActions {
-            shakePopup.addItem(withTitle: shakeActionTitles[action] ?? action)
-            shakePopup.lastItem?.representedObject = action
+            popup.addItem(withTitle: shakeActionTitles[action] ?? action)
+            popup.lastItem?.representedObject = action
         }
-        shakePopup.menu?.addItem(.separator())
+        popup.menu?.addItem(.separator())
         for binding in availableKeyBindings + draftSettings.customKeyBindings {
-            shakePopup.addItem(withTitle: "按键：\(displayKeyName(binding.name))")
-            shakePopup.lastItem?.representedObject = "Key:\(binding.name)"
+            popup.addItem(withTitle: "按键：\(displayKeyName(binding.name))")
+            popup.lastItem?.representedObject = "Key:\(binding.name)"
         }
     }
 
@@ -1218,15 +1443,19 @@ private final class SettingsWindowController: NSWindowController {
         popup.selectedItem?.representedObject as? String ?? fallback
     }
 
-    private func refreshBindingPopups(keepingLeft left: String?, right: String?, shake: String?) {
+    private func refreshBindingPopups(keepingLeft left: String?, right: String?, confirmLong: String?, shake: String?) {
         populateKeyPopup(leftPopup)
         populateKeyPopup(rightPopup)
+        populateActionPopup(confirmLongPopup)
         populateShakePopup()
         if let left {
             selectRaw(left, in: leftPopup)
         }
         if let right {
             selectRaw(right, in: rightPopup)
+        }
+        if let confirmLong {
+            selectRaw(confirmLong, in: confirmLongPopup)
         }
         if let shake {
             selectRaw(shake, in: shakePopup)
@@ -1272,8 +1501,9 @@ private final class SettingsWindowController: NSWindowController {
         captureKey(title: "录入 A 键绑定") { [weak self] binding in
             guard let self else { return }
             let right = self.selectedRaw(in: self.rightPopup, fallback: "Return")
+            let confirmLong = self.selectedRaw(in: self.confirmLongPopup, fallback: "Command+Return")
             let shake = self.selectedRaw(in: self.shakePopup, fallback: "Clear Input")
-            self.refreshBindingPopups(keepingLeft: binding.name, right: right, shake: shake)
+            self.refreshBindingPopups(keepingLeft: binding.name, right: right, confirmLong: confirmLong, shake: shake)
         }
     }
 
@@ -1281,8 +1511,19 @@ private final class SettingsWindowController: NSWindowController {
         captureKey(title: "录入 B 键绑定") { [weak self] binding in
             guard let self else { return }
             let left = self.selectedRaw(in: self.leftPopup, fallback: "F19")
+            let confirmLong = self.selectedRaw(in: self.confirmLongPopup, fallback: "Command+Return")
             let shake = self.selectedRaw(in: self.shakePopup, fallback: "Clear Input")
-            self.refreshBindingPopups(keepingLeft: left, right: binding.name, shake: shake)
+            self.refreshBindingPopups(keepingLeft: left, right: binding.name, confirmLong: confirmLong, shake: shake)
+        }
+    }
+
+    @objc private func captureConfirmLongKey() {
+        captureKey(title: "录入 B 键长按绑定") { [weak self] binding in
+            guard let self else { return }
+            let left = self.selectedRaw(in: self.leftPopup, fallback: "F19")
+            let right = self.selectedRaw(in: self.rightPopup, fallback: "Return")
+            let shake = self.selectedRaw(in: self.shakePopup, fallback: "Clear Input")
+            self.refreshBindingPopups(keepingLeft: left, right: right, confirmLong: "Key:\(binding.name)", shake: shake)
         }
     }
 
@@ -1291,7 +1532,8 @@ private final class SettingsWindowController: NSWindowController {
             guard let self else { return }
             let left = self.selectedRaw(in: self.leftPopup, fallback: "F19")
             let right = self.selectedRaw(in: self.rightPopup, fallback: "Return")
-            self.refreshBindingPopups(keepingLeft: left, right: right, shake: "Key:\(binding.name)")
+            let confirmLong = self.selectedRaw(in: self.confirmLongPopup, fallback: "Command+Return")
+            self.refreshBindingPopups(keepingLeft: left, right: right, confirmLong: confirmLong, shake: "Key:\(binding.name)")
         }
     }
 
@@ -1325,9 +1567,10 @@ private final class SettingsWindowController: NSWindowController {
     private func loadSettings() {
         draftSettings = SettingsStore.shared.settings
         editingMode = draftSettings.inputMode
-        refreshBindingPopups(keepingLeft: nil, right: nil, shake: nil)
+        refreshBindingPopups(keepingLeft: nil, right: nil, confirmLong: nil, shake: nil)
         selectRaw(editingMode.rawValue, in: inputModePopup)
         loadBindingDraft(for: editingMode)
+        selectRaw(draftSettings.confirmLongActionName, in: confirmLongPopup)
         selectRaw(draftSettings.shakeActionName, in: shakePopup)
         quotaField.stringValue = "\(draftSettings.quotaRefreshSeconds)"
         quotaCheckbox.state = draftSettings.enableCodexQuota ? .on : .off
@@ -1346,6 +1589,7 @@ private final class SettingsWindowController: NSWindowController {
         saveBindingDraft(for: editingMode)
         var settings = draftSettings
         settings.inputModeName = editingMode.rawValue
+        settings.confirmLongActionName = selectedRaw(in: confirmLongPopup, fallback: "Command+Return")
         settings.shakeActionName = selectedRaw(in: shakePopup, fallback: "Clear Input")
         settings.quotaRefreshSeconds = Int(quotaField.stringValue) ?? 300
         settings.enableCodexQuota = quotaCheckbox.state == .on
@@ -1483,6 +1727,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private var healthTimer: Timer?
     private var panelSequence = 1
     private var quotaFetchInFlight = false
+    private var panelRefreshQueued = false
     private var bridgeDiscoveryInFlight = false
     private var lastTimePanelPushAt = Date.distantPast
     private var typelessSessionActive = false
@@ -1819,6 +2064,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         let mode = settings.inputMode == .wechatIME ? "wechat_ime" : "typeless"
         let primary = hidReportBinding(settings.leftKey)
         let confirm = hidReportBinding(settings.rightKey)
+        let confirmLong = hidActionBinding(settings.confirmLongActionName, customKey: settings.confirmLongKey)
         let shake = settings.shakeKey.map(hidReportBinding) ?? (modifier: UInt8(0), keycode: UInt8(0))
         let payload: [String: Any] = [
             "type": "bridge_ready",
@@ -1828,6 +2074,9 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             "primary_key": Int(primary.keycode),
             "confirm_modifier": Int(confirm.modifier),
             "confirm_key": Int(confirm.keycode),
+            "confirm_long_action": settings.confirmLongActionName,
+            "confirm_long_modifier": Int(confirmLong.modifier),
+            "confirm_long_key": Int(confirmLong.keycode),
             "shake_action": settings.shakeActionName,
             "shake_modifier": Int(shake.modifier),
             "shake_key": Int(shake.keycode)
@@ -1882,6 +2131,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     }
 
     private func handlePrimaryInputDown() {
+        OpenWatcherHomeActivityTracker.shared.record("primary_down", weight: 0.7)
         switch SettingsStore.shared.settings.inputMode {
         case .typeless:
             let now = Date()
@@ -1904,6 +2154,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     }
 
     private func handlePrimaryInputUp() {
+        OpenWatcherHomeActivityTracker.shared.record("primary_up", weight: 0.6)
         switch SettingsStore.shared.settings.inputMode {
         case .typeless:
             guard typelessPrimaryIsDown || typelessSessionActive || lastState?.phase == "recording" else {
@@ -1937,6 +2188,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     }
 
     private func handleCodexEnterRequest() {
+        OpenWatcherHomeActivityTracker.shared.record("enter", weight: 0.5)
         if SettingsStore.shared.settings.inputMode == .wechatIME {
             if wechatOptionDown {
                 handleWeChatOptionUp()
@@ -1957,6 +2209,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     }
 
     private func handleShakeActionRequest() {
+        OpenWatcherHomeActivityTracker.shared.record("shake", weight: 0.75)
         if SettingsStore.shared.settings.shakeActionName == "Clear Input" {
             resetTypelessSessionTracking(clearFocus: true)
             write(VoiceState(active: false, phase: "idle", message: ""))
@@ -2071,10 +2324,10 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             BridgeStatusCenter.shared.quotaStatus = "Disabled"
             return
         }
-        pushQuotaPanel()
+        pushQuotaPanel(reason: "quota")
         quotaTimer?.invalidate()
         quotaTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(SettingsStore.shared.settings.quotaRefreshSeconds), repeats: true) { [weak self] _ in
-            self?.pushQuotaPanel()
+            self?.pushQuotaPanel(reason: "quota")
         }
     }
 
@@ -2100,7 +2353,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         }
     }
 
-    private func pushQuotaPanel() {
+    private func pushQuotaPanel(reason: String = "quota") {
         guard panelCharacteristic != nil else {
             return
         }
@@ -2112,6 +2365,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         BridgeStatusCenter.shared.quotaStatus = "Fetching"
         DispatchQueue.global(qos: .utility).async { [weak self] in
             do {
+                OpenWatcherHomeActivityTracker.shared.record("quota_sync", weight: 0.45)
                 let panel = try buildDevicePanel()
                 DispatchQueue.main.async {
                     guard let self else { return }
@@ -2119,7 +2373,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
                     self.sendPanelData(panel,
                                        kind: "quota",
                                        finalStatus: "Synced \(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium))",
-                                       reason: "quota")
+                                       reason: reason)
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -2282,7 +2536,28 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         queueStatusWrite(state.payload, label: "voice \(state.phase)")
         lastState = state
         BridgeStatusCenter.shared.typelessStatus = state.message.isEmpty ? state.phase : state.message
+        switch state.phase {
+        case "recording":
+            OpenWatcherHomeActivityTracker.shared.record("recording", weight: 0.85)
+        case "processing":
+            OpenWatcherHomeActivityTracker.shared.record("processing", weight: 0.9)
+        default:
+            OpenWatcherHomeActivityTracker.shared.record("idle", weight: 0.15)
+        }
+        schedulePanelRefresh(reason: "voice")
         log("state \(state.phase) active=\(state.active) message=\(state.message)")
+    }
+
+    private func schedulePanelRefresh(reason: String) {
+        guard panelCharacteristic != nil, !panelRefreshQueued else {
+            return
+        }
+        panelRefreshQueued = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            guard let self else { return }
+            self.panelRefreshQueued = false
+            self.pushQuotaPanel(reason: reason)
+        }
     }
 }
 

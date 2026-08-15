@@ -153,6 +153,7 @@ public:
     std::array<uint8_t, 6> getFactoryMac();
     std::string getFactoryMacString(std::string divider = "");
     void reboot();
+    void powerOff();
     void factoryReset();
 
     /* ---------------------------------- Power --------------------------------- */
@@ -301,7 +302,7 @@ private:
     void exitActivityDim();
     void enterActivitySleep();
     void exitActivitySleep();
-    void enterDeepSleep();
+    void enterAutoPowerOff();
     void configureCpuPower(bool lowPower);
     bool pollUserActivity();
     void displayEnterActivitySleep();

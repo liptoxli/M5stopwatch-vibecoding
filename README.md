@@ -1,6 +1,11 @@
 # M5stopwatch-vibecoding
 
+![Version](https://img.shields.io/badge/version-v0.6.0-6f5cff)
+![Platform](https://img.shields.io/badge/platform-ESP32--S3%20%7C%20macOS-2f81f7)
+
 M5Stack StopWatch 的 Codex vibe-coding 模块、扩展固件和 macOS 桥接应用。
+
+当前公开版本是 **v0.6.0**（2026-08-15）。固件的 About 页面和启动界面显示同一版本号；每次公开迭代都必须同时更新版本文件、固件版本、README 和变更记录。版本历史见 [CHANGELOG.md](CHANGELOG.md)，发布流程见 [docs/RELEASING.md](docs/RELEASING.md)。
 
 ![Codex StopWatch 实机运行效果](docs/assets/codex-stopwatch-ui-actual.jpeg)
 
@@ -40,21 +45,24 @@ docs/                     功能说明、额度机制、宠物替换指南
 
 ## 核心功能
 
-- Codex 页面：显示 5 小时额度、周额度、时间、电量、BLE 状态和宠物动画。
+- Codex 页面：只显示周额度、08:00 后今日消耗、重置倒计时、时间、连接状态和宠物动画。
 - macOS Bridge：连接 `M5Codex-*` BLE 设备，推送 Codex 额度，切换输入模式，配置 A/B/摇晃动作。
 - 输入模式：支持 Typeless 和微信输入法两套语音输入模式；按键绑定会保存到 macOS app，并同步到固件 NVS，真实按键由设备 BLE HID 发出。
 - Typeless 状态：macOS Bridge 可通过 Accessibility 观察录音/处理中状态，并把状态同步到设备；输入触发仍由设备负责。
 - 电量状态栏：Codex 页面顶部下拉显示电量；20% 以下红色常驻，也可以手动上滑隐藏。
 - Pet：基于多帧 C 资产的 LVGL 图片动画，可替换为自己的形象。
-- 省电：1 分钟降亮度和降频，3 分钟关闭屏幕/LVGL 更新，10 分钟 deep sleep；Wi-Fi 默认关闭，额度优先由 macOS BLE 推送。
-- 供电策略：插着 USB 时不会进入 deep sleep，只会保持轻度/普通省电状态；拔掉 USB 且持续空闲后才允许 deep sleep。
+- 省电：1 分钟降亮度和降频，3 分钟关闭显示并进入 activity sleep，15 分钟且未接外部电源时由 PMIC 自动关机；Wi-Fi 默认关闭，额度优先由 macOS BLE 推送。
+- 供电策略：插着 USB 时不自动关机；activity sleep 不是重启，可以通过触摸、按键或移动恢复。
 
 完整功能说明见 [docs/FEATURES.md](docs/FEATURES.md)。
 省电策略见 [docs/POWER_SAVING.md](docs/POWER_SAVING.md)。
+周额度圆屏几何见 [docs/WEEKLY_SEMICIRCLE_UI.md](docs/WEEKLY_SEMICIRCLE_UI.md)。
 
 ## 构建固件
 
 需要 ESP-IDF v5.5.x 和 M5Stack StopWatch 目标硬件。
+
+仓库根目录的 `VERSION` 和 `firmware-stopwatch-idf/version.txt` 是当前公开版本标识，构建前可运行 `tools/check_version.sh` 检查版本是否一致。
 
 ```bash
 cd firmware-stopwatch-idf
@@ -88,7 +96,9 @@ LaunchAgent 默认 `RunAtLoad=true`、`KeepAlive=false`：开机自动启动，�
 
 ## 额度机制
 
-Codex 额度由 macOS 本机读取，不写入固件，也不要求用户粘贴 token。Bridge 在用户开启额度推送时读取本机 Codex 登录文件，调用 ChatGPT/Codex 的本机已登录接口，得到 5 小时和周额度后通过 BLE 写入设备。
+Codex 额度由 macOS 本机读取，不要求用户粘贴 token。Bridge 在用户开启额度推送时读取本机 Codex 登录文件，调用 ChatGPT/Codex 的本机已登录接口，只提取 604800 秒周窗口，并把安全摘要通过 BLE 写入设备。固件只缓存额度摘要，不接收登录凭据。
+
+Bridge 以本地时间每天 08:00 为日统计边界，累计本周期内周额度下降的百分点。Bridge 如果在 08:00 没运行，只能从边界后的第一次成功采样开始，不能回溯精确历史。
 
 Claude Code 额度不在固件里直接实现。建议参考 `ai-limit` 这类 macOS 开源额度监控工具的做法：在 Mac 侧读取本机登录/使用状态，生成安全摘要，再通过 Bridge 或本地服务推送给设备。详细说明见 [docs/QUOTA.md](docs/QUOTA.md)。
 

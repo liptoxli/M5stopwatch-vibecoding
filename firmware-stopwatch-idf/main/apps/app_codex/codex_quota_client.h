@@ -8,6 +8,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <atomic>
+#include <array>
 #include <mutex>
 #include <string>
 
@@ -18,13 +19,31 @@ struct QuotaSnapshot {
     bool cached                = false;
     bool wifiConnected         = false;
     bool processing            = false;
-    int fiveHourLeftPct        = -1;
     int weeklyLeftPct          = -1;
-    std::string fiveHourUsage  = "--";
     std::string weeklyUsage    = "--";
+    int weeklyDayStartLeftPct  = -1;
+    int weeklySegmentStartLeftPct = -1;
+    int weeklyTodayUsedPctPoints = 0;
+    int weeklyResetCount       = 0;
+    std::string weeklyTrackingPeriodStart = "";
     std::string status         = "idle";
     std::string petState       = "idle";
     std::string message        = "Quota waiting";
+    std::string source         = "";
+    std::string updatedAt      = "";
+    bool stale                 = false;
+    std::string hostName       = "";
+    std::string sessionTitle   = "Codex Ready";
+    std::string contextLabel   = "-- / --";
+    int contextPressurePct     = 0;
+    int compactThresholdPct    = -1;
+    bool compactWarning        = false;
+    std::string totalTokensLabel = "--";
+    std::string modelLabel     = "--";
+    std::string reasoningLabel = "--";
+    std::string activityLabel  = "--";
+    bool activityLive          = false;
+    std::array<float, 24> activityBuckets = {};
     uint32_t sequence          = 0;
 };
 

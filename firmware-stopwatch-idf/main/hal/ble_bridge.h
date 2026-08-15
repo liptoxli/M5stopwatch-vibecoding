@@ -24,6 +24,7 @@ bool is_typeless_input_mode();
 
 void send_typeless_option(ButtonAction action);
 void send_codex_enter();
+void send_confirm_long_press();
 void send_shake_action();
 
 std::string status_text();

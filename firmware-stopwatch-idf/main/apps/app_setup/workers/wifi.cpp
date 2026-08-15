@@ -27,7 +27,8 @@ constexpr const char* kTag = "Setup-Wifi";
 constexpr const char* kSystemSettingsNs = "system";
 constexpr const char* kCodexSettingsNs = "codex";
 constexpr const char* kWifiEnabledKey = "wifi_enabled";
-constexpr const char* kWifiQuotaFallbackKey = "wifi_quota_fallback_enabled";
+constexpr char kWifiQuotaFallbackKey[] = "wifi_q_fback";
+static_assert(sizeof(kWifiQuotaFallbackKey) - 1 <= 15);
 
 constexpr int kPanelSize = 466;
 constexpr uint32_t kBgColor = 0x000000;
@@ -168,13 +169,28 @@ void ensure_wifi_initialized()
     }
 }
 
+void add_ssid_if_missing(SsidManager& ssids, const char* ssid, const char* password)
+{
+    const auto& saved = ssids.GetSsidList();
+    const bool exists = std::any_of(saved.begin(), saved.end(), [&](const auto& item) {
+        return item.ssid == ssid;
+    });
+    if (!exists) {
+        ssids.AddSsid(ssid, password);
+    }
+}
+
 void seed_known_wifi_profiles()
 {
     ensure_wifi_initialized();
     auto& ssids = SsidManager::GetInstance();
     for (size_t i = 0; i < codex_config::kKnownWifiProfileCount; ++i) {
         const auto& profile = codex_config::kKnownWifiProfiles[i];
-        ssids.AddSsid(profile.ssid, profile.password);
+        if (profile.preferDefault) {
+            ssids.AddSsid(profile.ssid, profile.password);
+        } else {
+            add_ssid_if_missing(ssids, profile.ssid, profile.password);
+        }
     }
     const auto& saved_ssids = ssids.GetSsidList();
     for (int i = 0; i < saved_ssids.size(); ++i) {

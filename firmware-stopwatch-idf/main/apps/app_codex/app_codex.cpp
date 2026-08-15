@@ -8,6 +8,7 @@
 #include <assets/assets.h>
 #include <hal/ble_bridge.h>
 #include <hal/hal.h>
+#include <hal/utils/settings/settings.h>
 #include <mooncake.h>
 #include <mooncake_log.h>
 
@@ -17,6 +18,19 @@ namespace {
 
 constexpr uint32_t kIdleViewFrameMs = 50;
 constexpr uint32_t kActiveViewFrameMs = 33;
+constexpr const char* kCodexSettingsNs = "codex";
+constexpr const char* kThemeKey = "theme";
+constexpr const char* kThemeOpenWatcherV2 = "openwatcher_v2";
+
+view::CodexView::ThemeMode load_codex_theme_mode()
+{
+    Settings settings(kCodexSettingsNs, false);
+    const std::string theme = settings.GetString(kThemeKey, "official_v1");
+    if (theme == kThemeOpenWatcherV2) {
+        return view::CodexView::ThemeMode::OpenWatcherV2;
+    }
+    return view::CodexView::ThemeMode::OfficialV1;
+}
 
 }  // namespace
 
@@ -43,6 +57,7 @@ void AppCodex::onOpen()
     _applied_ble_connected = ble_bridge::is_connected();
     _voice_active = false;
     _applied_voice_active = false;
+    _confirm_long_sent = false;
     _voice_mode = view::CodexView::VoiceMode::Idle;
     _applied_voice_mode = view::CodexView::VoiceMode::Idle;
     _voice_mode_since_ms = GetHAL().millis();
@@ -53,7 +68,7 @@ void AppCodex::onOpen()
     LvglLockGuard lock;
 
     _view = std::make_unique<view::CodexView>();
-    _view->init(lv_screen_active());
+    _view->init(lv_screen_active(), load_codex_theme_mode());
     view::create_status_bar(0x0B2030, 0x7DD8FF, true);
 }
 
@@ -123,14 +138,7 @@ void AppCodex::onRunning()
 
     if (_view) {
         if (quota_snapshot.sequence != 0 && quota_snapshot.sequence != _applied_quota_sequence) {
-            _view->applyQuota(quota_snapshot.fiveHourLeftPct,
-                              quota_snapshot.weeklyLeftPct,
-                              quota_snapshot.fiveHourUsage,
-                              quota_snapshot.weeklyUsage,
-                              quota_snapshot.valid,
-                              quota_snapshot.wifiConnected,
-                              quota_snapshot.processing,
-                              quota_snapshot.message);
+            _view->applySnapshot(quota_snapshot);
             _applied_quota_sequence = quota_snapshot.sequence;
             view_state_changed = true;
         }
@@ -210,6 +218,27 @@ void AppCodex::handleBluetoothKeys()
     }
 
     if (hal.btnB.wasPressed()) {
+        _confirm_long_sent = false;
+        mclog::tagDebug(getAppInfo().name, "BLE key B: confirm down");
+    }
+
+    if (hal.btnB.isPressed() && !_confirm_long_sent && hal.btnB.pressedFor(kConfirmLongPressMs)) {
+        _confirm_long_sent = true;
+        if (_voice_active) {
+            _voice_active = false;
+            _voice_mode = view::CodexView::VoiceMode::Idle;
+            _voice_mode_since_ms = GetHAL().millis();
+        }
+        mclog::tagDebug(getAppInfo().name, "BLE key B: confirm long press");
+        ble_bridge::send_confirm_long_press();
+    }
+
+    if (hal.btnB.wasReleased()) {
+        if (_confirm_long_sent) {
+            _confirm_long_sent = false;
+            mclog::tagDebug(getAppInfo().name, "BLE key B: confirm release after long press");
+            return;
+        }
         if (_voice_active) {
             _voice_active = false;
             _voice_mode = view::CodexView::VoiceMode::Idle;

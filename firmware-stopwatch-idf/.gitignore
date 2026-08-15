@@ -37,6 +37,7 @@
 # Build files
 build/
 cmake-build-*/
+/components/
 managed_components/
 
 # PlatformIO

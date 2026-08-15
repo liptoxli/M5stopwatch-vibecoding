@@ -65,12 +65,10 @@ namespace {
 
 constexpr std::uint32_t _activity_dim_timeout_ms = 1 * 60 * 1000;
 constexpr std::uint32_t _activity_light_sleep_timeout_ms = 3 * 60 * 1000;
-constexpr std::uint32_t _activity_deep_sleep_timeout_ms = 10 * 60 * 1000;
+constexpr std::uint32_t _activity_auto_power_off_timeout_ms = 15 * 60 * 1000;
 constexpr std::uint32_t _activity_poll_period_ms = 100;
 constexpr int _activity_dim_brightness = 10;
 constexpr float _activity_motion_threshold_g = 0.12f;
-constexpr gpio_num_t _activity_wake_button_a = GPIO_NUM_2;
-constexpr gpio_num_t _activity_wake_button_b = GPIO_NUM_1;
 
 float accel_delta(const Hal::ImuData& a, const Hal::ImuData& b)
 {
@@ -199,11 +197,11 @@ void Hal::updateActivityMonitor()
     }
 
     const auto idle_ms = now - _activity_last_ms;
-    if (idle_ms >= _activity_deep_sleep_timeout_ms) {
+    if (idle_ms >= _activity_auto_power_off_timeout_ms) {
         if (isBatteryCharging(false)) {
             return;
         }
-        enterDeepSleep();
+        enterAutoPowerOff();
         return;
     }
 
@@ -279,26 +277,16 @@ void Hal::exitActivitySleep()
     _activity_last_ms = millis();
 }
 
-void Hal::enterDeepSleep()
+void Hal::enterAutoPowerOff()
 {
-    constexpr uint64_t wake_mask = (1ULL << static_cast<uint8_t>(_activity_wake_button_a)) |
-                                   (1ULL << static_cast<uint8_t>(_activity_wake_button_b));
-
-    mclog::tagInfo(_tag, "deep sleep after {} ms idle", _activity_deep_sleep_timeout_ms);
+    mclog::tagInfo(_tag, "auto power off after {} ms idle", _activity_auto_power_off_timeout_ms);
     stop_wifi_radios();
     stopVibrate();
     stopLvglUpdate();
     setBackLightBrightness(0, false);
-
-    gpio_set_direction(_activity_wake_button_a, GPIO_MODE_INPUT);
-    gpio_set_pull_mode(_activity_wake_button_a, GPIO_PULLUP_ONLY);
-    gpio_set_direction(_activity_wake_button_b, GPIO_MODE_INPUT);
-    gpio_set_pull_mode(_activity_wake_button_b, GPIO_PULLUP_ONLY);
-
-    ESP_ERROR_CHECK(esp_sleep_disable_ext1_wakeup_io(0));
-    ESP_ERROR_CHECK(esp_sleep_enable_ext1_wakeup_io(wake_mask, ESP_EXT1_WAKEUP_ANY_LOW));
+    displayEnterActivitySleep();
     delay(50);
-    esp_deep_sleep_start();
+    powerOff();
 }
 
 void Hal::configureCpuPower(bool lowPower)

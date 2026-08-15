@@ -7,6 +7,7 @@
 #include <smooth_lvgl.hpp>
 #include <smooth_ui_toolkit.hpp>
 #include <uitk/short_namespace.hpp>
+#include <apps/app_codex/codex_quota_client.h>
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -16,6 +17,11 @@ namespace view {
 
 class CodexView {
 public:
+    enum class ThemeMode : uint8_t {
+        OfficialV1,
+        OpenWatcherV2,
+    };
+
     enum class VoiceMode : uint8_t {
         Idle,
         Recording,
@@ -29,51 +35,73 @@ public:
     };
 
     struct State {
-        QuotaSlot fiveHour;
         QuotaSlot weekly;
+        int weeklyDayStartLeftPct = -1;
+        int weeklySegmentStartLeftPct = -1;
+        int weeklyTodayUsedPctPoints = 0;
+        int weeklyResetCount = 0;
+        std::string weeklyTrackingPeriodStart;
         bool bleConnected  = false;
         bool wifiConnected = false;
         bool processing    = false;
         std::string message;
+        std::string source;
+        std::string updatedAt;
+        bool stale = false;
+        std::string hostName;
+        std::string sessionTitle = "Codex Ready";
+        std::string contextLabel = "-- / --";
+        int contextPressurePct = 0;
+        int compactThresholdPct = -1;
+        bool compactWarning = false;
+        std::string totalTokensLabel = "--";
+        std::string modelLabel = "--";
+        std::string reasoningLabel = "--";
+        std::string activityLabel = "--";
+        bool activityLive = false;
+        std::array<float, 24> activityBuckets = {};
         uint32_t messageExpiresAtMs = 0;
     };
 
-    void init(lv_obj_t* parent);
+    void init(lv_obj_t* parent, ThemeMode themeMode = ThemeMode::OfficialV1);
     void update();
-    void applyQuota(int fiveHourLeftPct,
-                    int weeklyLeftPct,
-                    const std::string& fiveHourResetLabel,
+    void applyQuota(int weeklyLeftPct,
                     const std::string& weeklyResetLabel,
                     bool valid,
                     bool wifiConnected,
                     bool processing,
                     const std::string& message);
+    void applySnapshot(const codex::QuotaSnapshot& snapshot);
     void applyBleState(bool connected, const std::string& hostMessage, bool hostMessageChanged);
     void setVoiceActive(bool active);
     void setVoiceMode(VoiceMode mode);
     bool consumeClearInputRequest();
 
 private:
-    struct EdgeQuotaBar {
-        std::unique_ptr<uitk::lvgl_cpp::Image> trackImage;
-        std::unique_ptr<uitk::lvgl_cpp::Container> fillClip;
-        std::unique_ptr<uitk::lvgl_cpp::Image> fillImage;
-        std::unique_ptr<uitk::lvgl_cpp::Label> percentLabel;
-        std::unique_ptr<uitk::lvgl_cpp::Label> title;
-        std::unique_ptr<uitk::lvgl_cpp::Container> underline;
+    struct SemicircleQuota {
+        std::unique_ptr<uitk::lvgl_cpp::Container> canvas;
+        std::unique_ptr<uitk::lvgl_cpp::Label> todayCaption;
+        std::unique_ptr<uitk::lvgl_cpp::Label> todayValue;
+        std::unique_ptr<uitk::lvgl_cpp::Label> remainingCaption;
+        std::unique_ptr<uitk::lvgl_cpp::Label> remainingValue;
         std::unique_ptr<uitk::lvgl_cpp::Label> resetLabel;
-        float renderedRatio = -1.0f;
+    };
+
+    struct V2QuotaRing {
+        std::unique_ptr<uitk::lvgl_cpp::Label> percentLabel;
+        std::unique_ptr<uitk::lvgl_cpp::Label> resetLabel;
+        std::unique_ptr<uitk::lvgl_cpp::Label> titleLabel;
     };
 
     std::unique_ptr<uitk::lvgl_cpp::Container> _panel;
+    ThemeMode _theme_mode = ThemeMode::OfficialV1;
     std::unique_ptr<uitk::lvgl_cpp::Container> _clock_panel;
     std::unique_ptr<uitk::lvgl_cpp::Container> _clock_hour_panel;
     std::unique_ptr<uitk::lvgl_cpp::Container> _clock_minute_panel;
     std::unique_ptr<uitk::lvgl_cpp::NumberFlow> _clock_hour_flow;
     std::unique_ptr<uitk::lvgl_cpp::NumberFlow> _clock_minute_flow;
     std::unique_ptr<uitk::lvgl_cpp::Label> _clock_colon;
-    EdgeQuotaBar _bar_5h;
-    EdgeQuotaBar _bar_week;
+    SemicircleQuota _semicircle_quota;
     std::unique_ptr<uitk::lvgl_cpp::Container> _pet_hit_area;
     std::unique_ptr<uitk::lvgl_cpp::Image> _pet_image;
     std::unique_ptr<uitk::lvgl_cpp::Container> _pet_glow;
@@ -91,6 +119,13 @@ private:
     std::array<std::unique_ptr<uitk::lvgl_cpp::Container>, 9> _voice_bars;
     std::unique_ptr<uitk::lvgl_cpp::Container> _ble_dot;
     std::unique_ptr<uitk::lvgl_cpp::Container> _wifi_dot;
+    std::unique_ptr<uitk::lvgl_cpp::Container> _v2_canvas;
+    std::unique_ptr<uitk::lvgl_cpp::Label> _v2_title_label;
+    std::unique_ptr<uitk::lvgl_cpp::Label> _v2_context_label;
+    std::unique_ptr<uitk::lvgl_cpp::Label> _v2_status_label;
+    std::unique_ptr<uitk::lvgl_cpp::Label> _v2_meta_left_label;
+    std::unique_ptr<uitk::lvgl_cpp::Label> _v2_meta_right_label;
+    V2QuotaRing _v2_week_ring;
 
     State _state;
     uint32_t _last_quota_update_tick = 0;
@@ -123,19 +158,22 @@ private:
     uint8_t _idle_action_kind = 0;
     const void* _pet_current_src = nullptr;
 
-    void initQuotaBar(EdgeQuotaBar& bar,
-                      const char* title,
-                      const char* resetLabel,
-                      bool leftSide,
-                      lv_color_t color);
+    void initSemicircleQuota();
+    void updateSemicircleQuota();
+    static void drawSemicircleQuotaEvent(lv_event_t* event);
+    void drawSemicircleQuota(lv_layer_t* layer, const lv_area_t& coords);
     void initFlipClock();
     void updateFlipClock(bool force = false);
-    void drawQuotaBar(EdgeQuotaBar& bar, bool leftSide, lv_color_t color, float remainingRatio);
-    void updateQuotaBar(EdgeQuotaBar& bar,
-                        const QuotaSlot& slot,
-                        bool leftSide,
-                        lv_color_t color,
-                        const char* title);
+    void initOpenWatcherV2();
+    void initV2QuotaRing(V2QuotaRing& ring,
+                         const char* title,
+                         lv_color_t color,
+                         int centerX,
+                         int centerY);
+    void updateV2QuotaRing(V2QuotaRing& ring, const QuotaSlot& slot, const char* title);
+    void updateOpenWatcherV2Labels();
+    static void drawOpenWatcherV2Event(lv_event_t* event);
+    void drawOpenWatcherV2(lv_layer_t* layer, const lv_area_t& coords);
     void initPet();
     void updatePet();
     void initVoiceWaveform();

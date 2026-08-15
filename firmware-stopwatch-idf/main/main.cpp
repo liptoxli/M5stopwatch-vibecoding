@@ -22,6 +22,17 @@ using namespace smooth_ui_toolkit;
 
 namespace {
 
+void add_ssid_if_missing(SsidManager& ssids, const char* ssid, const char* password)
+{
+    const auto& saved = ssids.GetSsidList();
+    const bool exists = std::any_of(saved.begin(), saved.end(), [&](const auto& item) {
+        return item.ssid == ssid;
+    });
+    if (!exists) {
+        ssids.AddSsid(ssid, password);
+    }
+}
+
 void init_wifi_station()
 {
     Settings settings("system", false);
@@ -38,7 +49,11 @@ void init_wifi_station()
     auto& ssids = SsidManager::GetInstance();
     for (size_t i = 0; i < codex_config::kKnownWifiProfileCount; ++i) {
         const auto& profile = codex_config::kKnownWifiProfiles[i];
-        ssids.AddSsid(profile.ssid, profile.password);
+        if (profile.preferDefault) {
+            ssids.AddSsid(profile.ssid, profile.password);
+        } else {
+            add_ssid_if_missing(ssids, profile.ssid, profile.password);
+        }
     }
     const auto& saved_ssids = ssids.GetSsidList();
     for (int i = 0; i < saved_ssids.size(); ++i) {
