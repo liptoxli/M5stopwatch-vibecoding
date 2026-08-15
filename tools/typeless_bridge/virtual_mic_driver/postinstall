@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+/usr/bin/killall coreaudiod 2>/dev/null || true
+exit 0

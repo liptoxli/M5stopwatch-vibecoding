@@ -32,7 +32,7 @@ constexpr uint32_t kQuotaTaskStackBytes = 12 * 1024;
 constexpr bool kDefaultWifiEnabled = false;
 constexpr bool kDefaultWifiQuotaFallbackEnabled = false;
 constexpr bool kEnableAudioOutput = true;
-constexpr bool kEnableAudioInput = false;
+constexpr bool kEnableAudioInput = true;
 constexpr bool kEnableAudioCodecInputPath = true;
 
 constexpr float kTiltFilterAlpha = 0.12f;

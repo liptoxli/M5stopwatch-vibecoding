@@ -1,11 +1,11 @@
 # M5stopwatch-vibecoding
 
-![Version](https://img.shields.io/badge/version-v0.6.0-6f5cff)
+![Version](https://img.shields.io/badge/version-v0.7.0-6f5cff)
 ![Platform](https://img.shields.io/badge/platform-ESP32--S3%20%7C%20macOS-2f81f7)
 
 M5Stack StopWatch 的 Codex vibe-coding 模块、扩展固件和 macOS 桥接应用。
 
-当前公开版本是 **v0.6.0**（2026-08-15）。固件的 About 页面和启动界面显示同一版本号；每次公开迭代都必须同时更新版本文件、固件版本、README 和变更记录。版本历史见 [CHANGELOG.md](CHANGELOG.md)，发布流程见 [docs/RELEASING.md](docs/RELEASING.md)。
+当前公开版本是 **v0.7.0**（2026-08-16），配套 macOS Bridge 版本为 **v1.1.0**。固件的 About 页面和启动界面显示同一固件版本号；每次公开迭代都必须同步更新版本文件、README 和变更记录。固件历史见 [CHANGELOG.md](CHANGELOG.md)，Bridge 历史见 [tools/typeless_bridge/CHANGELOG.md](tools/typeless_bridge/CHANGELOG.md)，发布流程见 [docs/RELEASING.md](docs/RELEASING.md)。
 
 ![Codex StopWatch 实机运行效果](docs/assets/codex-stopwatch-ui-actual.jpeg)
 
@@ -47,6 +47,7 @@ docs/                     功能说明、额度机制、宠物替换指南
 
 - Codex 页面：只显示周额度、08:00 后今日消耗、重置倒计时、时间、连接状态和宠物动画。
 - macOS Bridge：连接 `M5Codex-*` BLE 设备，推送 Codex 额度，切换输入模式，配置 A/B/摇晃动作。
+- 虚拟麦克风：菜单一键开启 `M5 StopWatch Mic`，StopWatch 以 16 kHz IMA-ADPCM 实时传输，Mac Bridge 解码后供 Typeless 等应用作为默认输入。
 - 输入模式：支持 Typeless 和微信输入法两套语音输入模式；按键绑定会保存到 macOS app，并同步到固件 NVS，真实按键由设备 BLE HID 发出。
 - Typeless 状态：macOS Bridge 可通过 Accessibility 观察录音/处理中状态，并把状态同步到设备；输入触发仍由设备负责。
 - 电量状态栏：Codex 页面顶部下拉显示电量；20% 以下红色常驻，也可以手动上滑隐藏。
@@ -58,6 +59,16 @@ docs/                     功能说明、额度机制、宠物替换指南
 省电策略见 [docs/POWER_SAVING.md](docs/POWER_SAVING.md)。
 周额度圆屏几何见 [docs/WEEKLY_SEMICIRCLE_UI.md](docs/WEEKLY_SEMICIRCLE_UI.md)。
 
+## 版本历史
+
+| 日期 | 固件 | Mac Bridge | 主要更新 |
+| --- | --- | --- | --- |
+| 2026-08-16 | v0.7.0 | v1.1.0 | 实时 BLE 麦克风、`M5 StopWatch Mic` 驱动、周额度圆屏与完整产品安装包 |
+| 2026-08-15 | v0.6.0 | v1.0.3 | 周额度/08:00 日基线、输入配置、稳定签名与公开独立构建 |
+| 2026-06-13 | v0.5.0（界面 V0.5） | v1.0.0-v1.0.2 | 首次公开 Codex 页面、Pet、BLE Bridge、Typeless/微信输入模式和 BLE HID |
+
+每个具体版本的逐项变更分别记录在固件 [CHANGELOG](CHANGELOG.md) 和 Mac Bridge [CHANGELOG](tools/typeless_bridge/CHANGELOG.md)，已经公开的版本号不会重复使用或移动标签。
+
 ## 构建固件
 
 需要 ESP-IDF v5.5.x 和 M5Stack StopWatch 目标硬件。
@@ -68,8 +79,10 @@ docs/                     功能说明、额度机制、宠物替换指南
 cd firmware-stopwatch-idf
 idf.py set-target esp32s3
 idf.py build
-idf.py app-flash
+idf.py flash
 ```
+
+首次安装、从 v0.6.0 或更早版本升级，或 `partitions.csv`/Bootloader 发生变化时，必须使用完整 `idf.py flash`。仅在设备已经使用当前分区布局、只是更新同一兼容版本的应用时，才使用 `idf.py app-flash`；否则旧分区表可能从错误地址启动并表现为黑屏。
 
 公开版默认不包含私人 Wi-Fi 和私人 relay。远端 panel URL 在：
 
@@ -93,6 +106,10 @@ Privacy & Security -> Accessibility
 ```
 
 LaunchAgent 默认 `RunAtLoad=true`、`KeepAlive=false`：开机自动启动，但用户退出后不会被强制拉起。
+
+虚拟麦克风模式默认关闭。开启后连续实时传输，不生成 WAV 文件；关闭后恢复原 macOS 默认输入。协议、带宽和包结构见 [docs/stopwatch-ble-microphone.md](docs/stopwatch-ble-microphone.md)。自定义 Core Audio 驱动是独立 GPLv3 组件，许可边界见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+产品安装包会安装菜单栏 App、登录 LaunchAgent 和 `M5 StopWatch Mic` 驱动。旧的开发测试设备 `BlackHole 2ch` 不再是产品运行依赖，可在确认新虚拟麦克风正常后单独卸载。
 
 ## 额度机制
 

@@ -2,6 +2,7 @@
  * BLE HID bridge for Typeless/Codex control.
  */
 #include "ble_bridge.h"
+#include "ble_microphone.h"
 
 #include <apps/app_codex/codex_config.h>
 #include "hal.h"
@@ -867,6 +868,7 @@ int gap_event(ble_gap_event* event, void*)
             update_ble_battery_level();
             set_host_status("BLE connected");
             ESP_LOGI(kTag, "connected: handle=%d", event->connect.conn_handle);
+            ble_microphone::on_connected(event->connect.conn_handle);
             const int rc = ble_gap_security_initiate(event->connect.conn_handle);
             ESP_LOGD(kTag, "security initiate: rc=%d", rc);
         } else {
@@ -878,6 +880,7 @@ int gap_event(ble_gap_event* event, void*)
         }
         return 0;
     case BLE_GAP_EVENT_DISCONNECT:
+        ble_microphone::on_disconnected();
         g_connected = false;
         g_paired = false;
         g_bridge_event_subscribed = false;
@@ -905,6 +908,7 @@ int gap_event(ble_gap_event* event, void*)
         set_host_status(g_paired ? "BLE paired" : "Pairing failed");
         return 0;
     case BLE_GAP_EVENT_SUBSCRIBE:
+        ble_microphone::on_gap_event(*event);
         ESP_LOGI(kTag,
                  "subscribe: conn=%d attr=%d reason=%d notify %d->%d indicate %d->%d",
                  event->subscribe.conn_handle,
@@ -936,6 +940,10 @@ int gap_event(ble_gap_event* event, void*)
                  event->mtu.conn_handle,
                  event->mtu.channel_id,
                  event->mtu.value);
+        return 0;
+    case BLE_GAP_EVENT_CONN_UPDATE:
+    case BLE_GAP_EVENT_PHY_UPDATE_COMPLETE:
+        ble_microphone::on_gap_event(*event);
         return 0;
     case BLE_GAP_EVENT_REPEAT_PAIRING:
     {
@@ -1205,6 +1213,10 @@ bool setup_hid_services()
         set_host_status("Bridge add failed");
         return false;
     }
+    if (!ble_microphone::register_service()) {
+        set_host_status("Mic service failed");
+        return false;
+    }
 
     ble_svc_hid_params hid = {};
     hid.proto_mode_present = 1;
@@ -1240,6 +1252,7 @@ bool setup_hid_services()
     }
 
     ble_svc_hid_init();
+    ble_microphone::start_capture_task();
     return true;
 }
 

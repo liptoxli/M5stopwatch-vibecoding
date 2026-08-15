@@ -188,6 +188,7 @@ private struct BridgeSettings: Codable, Equatable {
     var quotaRefreshSeconds: Int = 300
     var enableCodexQuota: Bool = true
     var syncTypelessShortcut: Bool = false
+    var virtualMicrophoneEnabled: Bool = false
 
     private enum CodingKeys: String, CodingKey {
         case leftKeyName
@@ -203,6 +204,7 @@ private struct BridgeSettings: Codable, Equatable {
         case quotaRefreshSeconds
         case enableCodexQuota
         case syncTypelessShortcut
+        case virtualMicrophoneEnabled
     }
 
     init() {}
@@ -222,6 +224,7 @@ private struct BridgeSettings: Codable, Equatable {
         quotaRefreshSeconds = try container.decodeIfPresent(Int.self, forKey: .quotaRefreshSeconds) ?? 300
         enableCodexQuota = try container.decodeIfPresent(Bool.self, forKey: .enableCodexQuota) ?? true
         syncTypelessShortcut = try container.decodeIfPresent(Bool.self, forKey: .syncTypelessShortcut) ?? false
+        virtualMicrophoneEnabled = try container.decodeIfPresent(Bool.self, forKey: .virtualMicrophoneEnabled) ?? false
     }
 
     var leftKey: KeyBinding {
@@ -352,6 +355,7 @@ private final class BridgeStatusCenter {
     var typelessStatus = "Unknown" { didSet { refreshMenu() } }
     var inputMode = SettingsStore.shared.settings.inputMode.rawValue { didSet { refreshMenu() } }
     var quotaStatus = "Waiting" { didSet { refreshMenu() } }
+    var microphoneStatus = "Off" { didSet { refreshMenu() } }
     var lastError = "" { didSet { refreshMenu() } }
 
     weak var appDelegate: BridgeAppDelegate?
@@ -1645,6 +1649,7 @@ private final class BridgeAppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "额度授权：\(selfCheck.quota)", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "语音状态：\(status.typelessStatus)", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Codex: \(status.quotaStatus)", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "M5 StopWatch Mic: \(status.microphoneStatus)", action: nil, keyEquivalent: ""))
         if !status.lastError.isEmpty {
             menu.addItem(NSMenuItem(title: "最近错误：\(status.lastError)", action: nil, keyEquivalent: ""))
         }
@@ -1658,6 +1663,9 @@ private final class BridgeAppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "摇晃动作：\(shakeActionTitles[settings.shakeActionName] ?? settings.shakeActionName)", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "额度刷新：每 \(settings.quotaRefreshSeconds) 秒", action: nil, keyEquivalent: ""))
         menu.addItem(.separator())
+        let microphoneItem = NSMenuItem(title: "启用 M5 StopWatch Mic", action: #selector(toggleVirtualMicrophone), keyEquivalent: "m")
+        microphoneItem.state = settings.virtualMicrophoneEnabled ? .on : .off
+        menu.addItem(microphoneItem)
         menu.addItem(NSMenuItem(title: "设置...", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: "运行诊断", action: #selector(runDiagnostics), keyEquivalent: "d"))
         menu.addItem(NSMenuItem(title: "请求辅助功能权限", action: #selector(requestAccessibility), keyEquivalent: "a"))
@@ -1675,6 +1683,14 @@ private final class BridgeAppDelegate: NSObject, NSApplicationDelegate {
         }
         settingsWindow?.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func toggleVirtualMicrophone() {
+        var settings = SettingsStore.shared.settings
+        settings.virtualMicrophoneEnabled.toggle()
+        SettingsStore.shared.save(settings)
+        bridge?.setVirtualMicrophoneEnabled(settings.virtualMicrophoneEnabled)
+        refreshMenu()
     }
 
     @objc private func requestAccessibility() {
@@ -1720,6 +1736,10 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private var eventCharacteristic: CBCharacteristic?
     private var statusCharacteristic: CBCharacteristic?
     private var panelCharacteristic: CBCharacteristic?
+    private var microphoneControlCharacteristic: CBCharacteristic?
+    private var microphoneAudioCharacteristic: CBCharacteristic?
+    private var microphoneStatsCharacteristic: CBCharacteristic?
+    private let microphonePipeline = StopWatchMicrophonePipeline()
     private var eventNotifyEnabled = false
     private var lastState: VoiceState?
     private var pollTimer: Timer?
@@ -1766,6 +1786,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         }
         BridgeStatusCenter.shared.selfCheckStatus = runBridgeSelfCheck().summary
         BridgeStatusCenter.shared.inputMode = SettingsStore.shared.settings.inputMode.rawValue
+        setVirtualMicrophoneEnabled(SettingsStore.shared.settings.virtualMicrophoneEnabled)
         quotaTimer?.invalidate()
         quotaTimer = nil
         if statusCharacteristic != nil {
@@ -1834,7 +1855,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         resetBridgeCharacteristics()
         BridgeStatusCenter.shared.bleStatus = "Connected"
-        log("Connected. Discovering bridge service...")
+        log("Connected. Discovering bridge and microphone services...")
         discoverBridgeServices(peripheral, reason: "connect")
     }
 
@@ -1856,6 +1877,8 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         quotaTimer?.invalidate()
         quotaTimer = nil
         resetBridgeCharacteristics()
+        microphonePipeline.stop()
+        BridgeStatusCenter.shared.microphoneStatus = SettingsStore.shared.settings.virtualMicrophoneEnabled ? "Waiting for BLE" : "Off"
         self.peripheral = nil
         if options.once {
             exit(0)
@@ -1870,12 +1893,21 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             exit(1)
         }
         bridgeDiscoveryInFlight = false
-        guard let service = peripheral.services?.first(where: { $0.uuid == serviceUUID }) else {
+        guard let services = peripheral.services,
+              let service = services.first(where: { $0.uuid == serviceUUID }) else {
             BridgeStatusCenter.shared.bleStatus = "Bridge service missing"
             log("Bridge service not found. Check firmware UUID / Bluetooth setting.")
             exit(1)
         }
         peripheral.discoverCharacteristics([eventUUID, statusUUID, panelUUID], for: service)
+        if let microphoneService = services.first(where: { $0.uuid == stopWatchMicrophoneServiceUUID }) {
+            peripheral.discoverCharacteristics(
+                [stopWatchMicrophoneControlUUID, stopWatchMicrophoneAudioUUID, stopWatchMicrophoneStatsUUID],
+                for: microphoneService
+            )
+        } else if SettingsStore.shared.settings.virtualMicrophoneEnabled {
+            BridgeStatusCenter.shared.microphoneStatus = "Firmware service missing"
+        }
     }
 
     func peripheral(_ peripheral: CBPeripheral,
@@ -1887,6 +1919,21 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             exit(1)
         }
         bridgeDiscoveryInFlight = false
+
+        if service.uuid == stopWatchMicrophoneServiceUUID {
+            for characteristic in service.characteristics ?? [] {
+                switch characteristic.uuid {
+                case stopWatchMicrophoneControlUUID: microphoneControlCharacteristic = characteristic
+                case stopWatchMicrophoneAudioUUID: microphoneAudioCharacteristic = characteristic
+                case stopWatchMicrophoneStatsUUID: microphoneStatsCharacteristic = characteristic
+                default: break
+                }
+            }
+            if SettingsStore.shared.settings.virtualMicrophoneEnabled {
+                setVirtualMicrophoneEnabled(true)
+            }
+            return
+        }
 
         for characteristic in service.characteristics ?? [] {
             if characteristic.uuid == eventUUID {
@@ -1915,6 +1962,20 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     func peripheral(_ peripheral: CBPeripheral,
                     didUpdateNotificationStateFor characteristic: CBCharacteristic,
                     error: Error?) {
+        if characteristic.uuid == stopWatchMicrophoneAudioUUID || characteristic.uuid == stopWatchMicrophoneStatsUUID {
+            if let error {
+                BridgeStatusCenter.shared.microphoneStatus = "Subscribe failed"
+                BridgeStatusCenter.shared.lastError = error.localizedDescription
+                return
+            }
+            if characteristic.uuid == stopWatchMicrophoneAudioUUID,
+               characteristic.isNotifying,
+               SettingsStore.shared.settings.virtualMicrophoneEnabled {
+                sendMicrophoneControl(start: true)
+                BridgeStatusCenter.shared.microphoneStatus = "Streaming"
+            }
+            return
+        }
         guard characteristic.uuid == eventUUID else { return }
         if let error {
             eventNotifyEnabled = false
@@ -1934,6 +1995,18 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             log("Event read failed: \(error.localizedDescription)")
             return
         }
+        if characteristic.uuid == stopWatchMicrophoneAudioUUID, let data = characteristic.value {
+            if !microphonePipeline.processAudioPacket(data) {
+                BridgeStatusCenter.shared.lastError = "Invalid microphone packet"
+            }
+            return
+        }
+        if characteristic.uuid == stopWatchMicrophoneStatsUUID,
+           let data = characteristic.value,
+           let stats = microphonePipeline.statsDescription(data) {
+            log("microphone stats \(stats)")
+            return
+        }
         guard characteristic.uuid == eventUUID,
               let data = characteristic.value,
               let text = String(data: data, encoding: .utf8) else {
@@ -1946,6 +2019,13 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     func peripheral(_ peripheral: CBPeripheral,
                     didWriteValueFor characteristic: CBCharacteristic,
                     error: Error?) {
+        if characteristic.uuid == stopWatchMicrophoneControlUUID {
+            if let error {
+                BridgeStatusCenter.shared.microphoneStatus = "Control failed"
+                BridgeStatusCenter.shared.lastError = error.localizedDescription
+            }
+            return
+        }
         guard characteristic.uuid == statusUUID else { return }
         statusWriteInFlight = false
         if let error {
@@ -1985,6 +2065,9 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         eventCharacteristic = nil
         statusCharacteristic = nil
         panelCharacteristic = nil
+        microphoneControlCharacteristic = nil
+        microphoneAudioCharacteristic = nil
+        microphoneStatsCharacteristic = nil
         eventNotifyEnabled = false
         lastRediscoverAt = Date.distantPast
         lastBridgeConfigPayload = nil
@@ -2000,7 +2083,51 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         }
         bridgeDiscoveryInFlight = true
         lastRediscoverAt = Date()
-        peripheral.discoverServices([serviceUUID])
+        peripheral.discoverServices([serviceUUID, stopWatchMicrophoneServiceUUID])
+    }
+
+    func setVirtualMicrophoneEnabled(_ enabled: Bool) {
+        guard enabled else {
+            sendMicrophoneControl(start: false)
+            if let peripheral, let audio = microphoneAudioCharacteristic, audio.isNotifying {
+                peripheral.setNotifyValue(false, for: audio)
+            }
+            if let peripheral, let stats = microphoneStatsCharacteristic, stats.isNotifying {
+                peripheral.setNotifyValue(false, for: stats)
+            }
+            microphonePipeline.stop()
+            BridgeStatusCenter.shared.microphoneStatus = "Off"
+            return
+        }
+
+        do {
+            let deviceName = try microphonePipeline.start()
+            BridgeStatusCenter.shared.microphoneStatus = deviceName == stopWatchVirtualMicrophoneName
+                ? "Ready" : "Ready (BlackHole fallback)"
+        } catch {
+            BridgeStatusCenter.shared.microphoneStatus = "Driver missing"
+            BridgeStatusCenter.shared.lastError = error.localizedDescription
+            return
+        }
+        guard let peripheral, let audio = microphoneAudioCharacteristic else {
+            BridgeStatusCenter.shared.microphoneStatus = "Waiting for BLE"
+            return
+        }
+        if !audio.isNotifying {
+            peripheral.setNotifyValue(true, for: audio)
+        } else {
+            sendMicrophoneControl(start: true)
+        }
+        if let stats = microphoneStatsCharacteristic, !stats.isNotifying {
+            peripheral.setNotifyValue(true, for: stats)
+        }
+    }
+
+    private func sendMicrophoneControl(start: Bool) {
+        guard let peripheral, let control = microphoneControlCharacteristic else { return }
+        let type: CBCharacteristicWriteType = control.properties.contains(.write) ? .withResponse : .withoutResponse
+        peripheral.writeValue(Data([start ? 1 : 0]), for: control, type: type)
+        log("microphone control: \(start ? "start" : "stop")")
     }
 
     private func startHealthLoop() {

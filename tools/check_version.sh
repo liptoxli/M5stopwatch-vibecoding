@@ -3,9 +3,15 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 version="$(tr -d '[:space:]' < "$repo_root/VERSION")"
+bridge_version="$(tr -d '[:space:]' < "$repo_root/tools/typeless_bridge/VERSION")"
 
 if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "VERSION must use MAJOR.MINOR.PATCH, got: $version" >&2
+    exit 1
+fi
+
+if [[ ! "$bridge_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "tools/typeless_bridge/VERSION must use MAJOR.MINOR.PATCH, got: $bridge_version" >&2
     exit 1
 fi
 
@@ -20,5 +26,7 @@ grep -Fq "FirmwareVersion = \"V$version\"" \
 grep -Fq "version-v$version-" "$repo_root/README.md"
 grep -Fq "当前公开版本是 **v$version**" "$repo_root/README.md"
 grep -Fq "## [$version]" "$repo_root/CHANGELOG.md"
+grep -Fq "## [$bridge_version]" "$repo_root/tools/typeless_bridge/CHANGELOG.md"
+grep -Fq "Bridge 版本为 **v$bridge_version**" "$repo_root/README.md"
 
-echo "Version metadata is consistent: v$version"
+echo "Version metadata is consistent: firmware v$version, Bridge v$bridge_version"

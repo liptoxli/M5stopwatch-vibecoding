@@ -2,13 +2,16 @@
 
 StopWatch BLE Bridge is the macOS companion app for the M5 StopWatch Codex firmware.
 
-It provides four local functions:
+Current version: **v1.1.0**. Full version history: [CHANGELOG.md](CHANGELOG.md).
+
+It provides local functions including:
 
 - Connect to `M5Codex-*` over Bluetooth.
 - Sync configurable key bindings and input mode to firmware.
 - Optionally observe Typeless recording/processing state and sync it back to the device.
 - Optionally read local Codex auth and push weekly quota snapshots to the device.
 - Persist a daily weekly-quota baseline using an 08:00 local-time boundary.
+- Stream the StopWatch microphone as 16 kHz IMA-ADPCM and feed a macOS virtual input named `M5 StopWatch Mic`.
 
 Real keyboard input is sent by the device firmware through BLE HID. The bridge app does not inject Typeless, WeChat IME, Enter, or Clear Input keystrokes into macOS. No account credentials are bundled in the app. Codex quota sync is optional and reads the current user's local `~/.codex/auth.json` only when enabled.
 
@@ -27,7 +30,8 @@ Real keyboard input is sent by the device firmware through BLE HID. The bridge a
    `System Settings -> Privacy & Security -> Accessibility -> StopWatch BLE Bridge`
 
 5. Open the menu bar M5 device icon.
-6. Open `Settings...` and choose:
+6. Enable `M5 StopWatch Mic` when the StopWatch microphone should become the macOS default input. Disable it to stop the BLE stream and restore the previous input device.
+7. Open `Settings...` and choose:
 
    - Left key: default `F19`.
    - Right key: default `Return`.
@@ -36,7 +40,25 @@ Real keyboard input is sent by the device firmware through BLE HID. The bridge a
    - Codex quota push: enabled by default, requires local Codex login.
    - Typeless shortcut sync: disabled by default. Enable only when using Typeless and you want the app to write the left key into Typeless local settings.
 
-7. Configure the same left/right shortcuts in your input app if needed. This can be Typeless, Tencent Input, or any other app that accepts normal keyboard shortcuts.
+8. Configure the same left/right shortcuts in your input app if needed. This can be Typeless, Tencent Input, or any other app that accepts normal keyboard shortcuts.
+
+## Virtual microphone
+
+Virtual microphone mode is off by default. When enabled, the Bridge:
+
+1. Selects `M5 StopWatch Mic` as the macOS default input.
+2. Subscribes to the firmware's BLE audio service.
+3. Sends `Start`; the device captures continuously in 20 ms frames.
+4. Decodes 4-bit IMA-ADPCM to 16-bit, 16 kHz mono PCM and writes it to the hidden driver output.
+5. Sends `Stop` and restores the previous input when the mode is disabled.
+
+Each BLE packet carries 320 decoded samples (20 ms): 14 bytes of protocol header plus 160 bytes of ADPCM. The steady wire rate is about 8.7 KB/s, while decoded PCM is 32 KB/s. No WAV container or recording file is used.
+
+The product installer adds the Core Audio HAL driver. Driver installation requires macOS administrator authorization and restarts Core Audio. During development only, the Bridge can fall back to an existing `BlackHole 2ch` device.
+
+The product installer includes `M5 StopWatch Mic`, so `BlackHole 2ch` is not required in normal use. After verifying the new device, an old Homebrew test installation can be removed with `brew uninstall --cask blackhole-2ch`.
+
+The custom virtual driver is a separate GPLv3 component based on BlackHole. See [`virtual_mic_driver/README.md`](virtual_mic_driver/README.md) and the repository `THIRD_PARTY_NOTICES.md`.
 
 ## Multi-Mac Pairing
 
@@ -67,6 +89,7 @@ The menu bar app shows:
 - BLE connection status.
 - Voice state detected through Accessibility when Typeless is available.
 - Codex quota push status.
+- Virtual microphone off / waiting / streaming status.
 - Last local error.
 - Current left/right key bindings.
 - Current quota refresh interval.
@@ -165,17 +188,29 @@ tools/typeless_bridge/build_stopwatch_ble_bridge.sh
 ## Package Release
 
 ```bash
-tools/typeless_bridge/package_release.sh 1.0.0
+tools/typeless_bridge/package_release.sh 1.1.0
 ```
 
 This creates:
 
 ```text
-dist/StopWatch-BLE-Bridge-1.0.0-macOS-arm64.zip
-dist/StopWatch-BLE-Bridge-1.0.0-macOS-arm64.zip.sha256
+dist/StopWatch-BLE-Bridge-1.1.0-macOS-arm64.zip
+dist/StopWatch-BLE-Bridge-1.1.0-macOS-arm64.zip.sha256
 ```
 
 The release package contains only the app bundle. It does not install the LaunchAgent or start the app automatically.
+
+To build the product installer that installs the app, login LaunchAgent, and
+`M5 StopWatch Mic` Core Audio driver together:
+
+```bash
+tools/typeless_bridge/package_product_installer.sh 1.1.0
+```
+
+The `.pkg` requires administrator authorization because it writes the audio
+driver under `/Library/Audio/Plug-Ins/HAL`. Public distribution additionally
+requires a Developer ID Installer signature and notarization. The build also
+emits the pinned BlackHole corresponding-source archive required by GPLv3.
 
 ## Input Mode
 

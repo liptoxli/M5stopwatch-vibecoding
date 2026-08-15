@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-VERSION="${1:-1.0.0}"
+VERSION="${1:-$(tr -d '[:space:]' < "$SCRIPT_DIR/VERSION")}"
 DIST_DIR="$ROOT_DIR/dist"
 WORK_DIR="${TMPDIR:-/private/tmp}/stopwatch-ble-bridge-release-$VERSION"
 STAGE_DIR="$WORK_DIR/StopWatch-BLE-Bridge-$VERSION-macOS-arm64"
@@ -16,11 +16,13 @@ BIN="$MACOS_DIR/stopwatch-ble-bridge"
 ZIP_PATH="$DIST_DIR/StopWatch-BLE-Bridge-$VERSION-macOS-arm64.zip"
 TMP_ZIP_PATH="$WORK_DIR/StopWatch-BLE-Bridge-$VERSION-macOS-arm64.zip"
 SIGN_IDENTITY="${BRIDGE_CODESIGN_IDENTITY:-M5StopWatch Local Code Signing}"
+ICON_MODULE_CACHE_DIR="${TMPDIR:-/private/tmp}/stopwatch-ble-bridge-icon-module-cache"
 
 "$SCRIPT_DIR/build_stopwatch_ble_bridge.sh" >/dev/null
 
 rm -rf "$WORK_DIR" "$ZIP_PATH" "$ZIP_PATH.sha256"
 mkdir -p "$WORK_DIR" "$DIST_DIR"
+mkdir -p "$ICON_MODULE_CACHE_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$BUILD_BIN" "$BIN"
 chmod 755 "$BIN"
@@ -28,7 +30,7 @@ chmod 755 "$BIN"
 ICONSET="$RESOURCES_DIR/StopWatchBridge.iconset"
 rm -rf "$ICONSET" "$RESOURCES_DIR/StopWatchBridge.icns"
 mkdir -p "$ICONSET"
-/usr/bin/swiftc "$SCRIPT_DIR/generate_bridge_icon.swift" -o "$DIST_DIR/generate_stopwatch_bridge_icon"
+/usr/bin/swiftc -module-cache-path "$ICON_MODULE_CACHE_DIR" "$SCRIPT_DIR/generate_bridge_icon.swift" -o "$DIST_DIR/generate_stopwatch_bridge_icon"
 "$DIST_DIR/generate_stopwatch_bridge_icon" "$ICONSET" >/dev/null
 /usr/bin/iconutil -c icns "$ICONSET" -o "$RESOURCES_DIR/StopWatchBridge.icns"
 rm -rf "$ICONSET" "$DIST_DIR/generate_stopwatch_bridge_icon"

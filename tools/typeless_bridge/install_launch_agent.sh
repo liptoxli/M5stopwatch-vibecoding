@@ -13,6 +13,7 @@ WATCHDOG_PLIST="$HOME/Library/LaunchAgents/dev.vibecoding.stopwatch-ble-bridge.w
 WATCHDOG="$HOME/Library/Application Support/M5StopWatch/StopWatchBleBridge/watchdog.sh"
 LOG="$HOME/Library/Logs/stopwatch-ble-bridge.log"
 SIGN_IDENTITY="${BRIDGE_CODESIGN_IDENTITY:-M5StopWatch Local Code Signing}"
+BRIDGE_VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/VERSION")"
 
 "$SCRIPT_DIR/build_stopwatch_ble_bridge.sh" >/dev/null
 launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
@@ -30,7 +31,7 @@ mkdir -p "$ICONSET"
 /tmp/generate_stopwatch_bridge_icon "$ICONSET" >/dev/null
 /usr/bin/iconutil -c icns "$ICONSET" -o "$RESOURCES_DIR/StopWatchBridge.icns"
 
-cat > "$CONTENTS_DIR/Info.plist" <<'INFO_PLIST'
+cat > "$CONTENTS_DIR/Info.plist" <<INFO_PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -55,9 +56,9 @@ cat > "$CONTENTS_DIR/Info.plist" <<'INFO_PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>1.0</string>
+  <string>$BRIDGE_VERSION</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>$BRIDGE_VERSION</string>
   <key>LSUIElement</key>
   <true/>
   <key>NSBluetoothAlwaysUsageDescription</key>

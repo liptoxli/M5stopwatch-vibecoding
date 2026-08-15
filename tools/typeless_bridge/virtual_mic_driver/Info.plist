@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key><string>English</string>
+  <key>CFBundleExecutable</key><string>M5StopWatchMic</string>
+  <key>CFBundleIdentifier</key><string>dev.vibecoding.m5-stopwatch-mic</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleName</key><string>M5 StopWatch Mic</string>
+  <key>CFBundlePackageType</key><string>BNDL</string>
+  <key>CFBundleShortVersionString</key><string>0.7.1-m5.1</string>
+  <key>CFBundleSignature</key><string>????</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>CFPlugInFactories</key>
+  <dict><key>45B52E1D-3F2C-48DE-B414-0B6D7367CD51</key><string>BlackHole_Create</string></dict>
+  <key>CFPlugInTypes</key>
+  <dict>
+    <key>443ABAB8-E7B3-491A-B985-BEB9187030DB</key>
+    <array><string>45B52E1D-3F2C-48DE-B414-0B6D7367CD51</string></array>
+  </dict>
+</dict>
+</plist>
