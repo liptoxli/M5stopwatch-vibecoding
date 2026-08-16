@@ -2,6 +2,19 @@
 
 Mac Bridge 使用独立语义化版本。固件与 Bridge 的兼容版本关系见仓库根目录 [README](../../README.md#版本历史)。
 
+## [1.1.6] - 2026-08-16
+
+### Changed
+
+- 录音期间 BLE 明确断开或音频连续中断时，本次 Typeless 听写会被标记为失败，不再静默续接残缺语音。
+- 瞬断时保持 `M5 StopWatch Mic` 虚拟输入和系统默认输入不变，只输出静音并自动恢复 BLE 链路。
+- Bridge 会结束当前 Typeless 听写并保留已有文字；重连后只恢复待机，用户按 A 或原 Typeless 快捷键即可开始一段新录音。
+- 菜单栏持续显示“录音中断”，直到用户开始重试；空闲状态下的 BLE 重连仍保持静默。
+
+### Fixed
+
+- 修复按需麦克风在录音中途重连后停在 `Ready`、导致后续讲话全部丢失但 Typeless 仍显示录音的问题。
+
 ## [1.1.5] - 2026-08-16
 
 ### Changed
@@ -97,6 +110,7 @@ Mac Bridge 使用独立语义化版本。固件与 Bridge 的兼容版本关系�
 - 支持 `M5Codex-*` 连接、Codex 额度推送、输入模式和按键配置同步。
 - 支持 Typeless 状态观察、LaunchAgent 安装和 arm64 ZIP 发布包。
 
+[1.1.6]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.1.6
 [1.1.5]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.1.5
 [1.1.4]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.1.4
 [1.1.3]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.1.3

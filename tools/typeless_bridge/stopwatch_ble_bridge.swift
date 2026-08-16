@@ -25,6 +25,10 @@ private let typelessPrimaryDownDebounceSeconds: TimeInterval = 0.35
 private let typelessStartIdleGraceSeconds: TimeInterval = 1.0
 private let typelessProcessingIdleGraceSeconds: TimeInterval = 1.2
 private let typelessProcessingMaximumSeconds: TimeInterval = 2.8
+private let microphoneStreamFaultSeconds: TimeInterval = 1.2
+private let microphoneStreamStartGraceSeconds: TimeInterval = 1.5
+private let microphoneFatalPacketGap: UInt64 = 25
+private let microphoneFatalDroppedFrames: UInt32 = 25
 
 private enum MicrophoneControlCommand: UInt8 {
     case disable = 0
@@ -1775,6 +1779,11 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private var activeMicrophoneControlCommand: MicrophoneControlCommand?
     private var microphoneControlWriteInFlight = false
     private var microphoneShortcutMonitor: Any?
+    private var suppressNextMicrophoneShortcut = false
+    private var microphoneSessionFaulted = false
+    private var microphoneRecordingStartedAt: Date?
+    private var microphoneDroppedBaseline: UInt32 = 0
+    private var microphoneDroppedBaselineAt: Date?
     private var lastBridgeConfigPayload: String?
     private var statusWriteQueue: [(payload: String, label: String)] = []
     private var statusWriteInFlight = false
@@ -1804,13 +1813,22 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             guard !event.isARepeat else { return }
             let keyCode = UInt16(event.keyCode)
             DispatchQueue.main.async { [weak self] in
-                guard let self,
+                guard let self else { return }
+                if self.suppressNextMicrophoneShortcut {
+                    self.suppressNextMicrophoneShortcut = false
+                    log("synthetic Typeless stop shortcut ignored by microphone wake monitor")
+                    return
+                }
+                guard
                       SettingsStore.shared.settings.virtualMicrophoneEnabled,
                       SettingsStore.shared.settings.inputMode == .typeless,
                       SettingsStore.shared.settings.leftKey.macKeyCode == keyCode,
                       self.lastState?.phase != "recording",
                       !self.typelessSessionActive else {
                     return
+                }
+                if self.microphoneSessionFaulted {
+                    self.clearMicrophoneSessionFaultForRetry(source: "Mac shortcut")
                 }
                 self.queueMicrophoneControl(.startVoice)
                 log("microphone wake requested by Typeless shortcut")
@@ -1907,6 +1925,9 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        let interruptedRecording = SettingsStore.shared.settings.virtualMicrophoneEnabled &&
+            SettingsStore.shared.settings.inputMode == .typeless &&
+            (typelessSessionActive || lastState?.phase == "recording")
         BridgeStatusCenter.shared.bleStatus = "Disconnected"
         log("Disconnected: \(error?.localizedDescription ?? "normal")")
         pollTimer?.invalidate()
@@ -1914,9 +1935,17 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         quotaTimer?.invalidate()
         quotaTimer = nil
         resetBridgeCharacteristics()
-        microphonePipeline.stop()
-        BridgeStatusCenter.shared.microphoneStatus = SettingsStore.shared.settings.virtualMicrophoneEnabled ? "Waiting for BLE" : "Off"
+        if SettingsStore.shared.settings.virtualMicrophoneEnabled {
+            microphonePipeline.prepareForStreamRestart()
+            BridgeStatusCenter.shared.microphoneStatus = interruptedRecording ? "Interrupted" : "Waiting for BLE"
+        } else {
+            microphonePipeline.stop()
+            BridgeStatusCenter.shared.microphoneStatus = "Off"
+        }
         self.peripheral = nil
+        if interruptedRecording {
+            triggerMicrophoneSessionFault(reason: "BLE disconnected during recording", stopTypeless: true)
+        }
         if options.once {
             exit(0)
         }
@@ -2268,7 +2297,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             BridgeStatusCenter.shared.microphoneStatus = "Streaming (legacy firmware)"
         case .armOnDemand:
             microphoneOnDemandSupported = true
-            BridgeStatusCenter.shared.microphoneStatus = "Ready"
+            BridgeStatusCenter.shared.microphoneStatus = microphoneSessionFaulted ? "Interrupted" : "Ready"
         case .startVoice:
             BridgeStatusCenter.shared.microphoneStatus = "Streaming"
         case .stopVoice:
@@ -2335,6 +2364,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         }
 
         let health = microphonePipeline.health(now: now)
+        checkMicrophoneSessionFault(health, now: now)
         if now.timeIntervalSince(lastMicrophoneHealthLogAt) >= 30 {
             lastMicrophoneHealthLogAt = now
             let packetAge = health.packetAge.map { String(format: "%.2f", $0) } ?? "--"
@@ -2374,7 +2404,8 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
 
         let streamAge = health.packetAge ?? health.outputAge ?? 0
         let statsFresh = health.statsAge.map { $0 <= 3.0 } ?? false
-        if health.outputHealthy,
+        if !microphoneSessionFaulted,
+           health.outputHealthy,
            statsFresh,
            health.deviceStreaming,
            streamAge > 3.0,
@@ -2578,6 +2609,9 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     }
 
     private func handleTypelessPrimaryDownStatus() {
+        if microphoneSessionFaulted {
+            clearMicrophoneSessionFaultForRetry(source: "StopWatch A")
+        }
         if processingUntil != nil || lastState?.phase == "processing" {
             typelessSessionActive = false
             processingUntil = nil
@@ -2811,6 +2845,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     }
 
     private func writeCurrentState(force: Bool) {
+        checkMicrophoneSessionFault(microphonePipeline.health(now: Date()), now: Date())
         let state = resolvedState()
         if state.phase == "idle" && !typelessPrimaryIsDown {
             typelessSessionActive = false
@@ -2823,6 +2858,9 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     }
 
     private func resolvedState() -> VoiceState {
+        if microphoneSessionFaulted {
+            return VoiceState(active: false, phase: "error", message: "录音中断，按 A 重试")
+        }
         if let forcedState = options.forcedState {
             return forcedState
         }
@@ -2878,21 +2916,130 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
               state.payload.data(using: .utf8) != nil else {
             return
         }
+        let previousPhase = lastState?.phase
         queueStatusWrite(state.payload, label: "voice \(state.phase)")
         lastState = state
         BridgeStatusCenter.shared.typelessStatus = state.message.isEmpty ? state.phase : state.message
         switch state.phase {
         case "recording":
+            if previousPhase != "recording" {
+                microphoneRecordingStartedAt = Date()
+                microphoneDroppedBaseline = microphonePipeline.health(now: Date()).devicePacketsDropped
+                microphoneDroppedBaselineAt = Date()
+            }
             queueMicrophoneControl(.startVoice)
             OpenWatcherHomeActivityTracker.shared.record("recording", weight: 0.85)
         case "processing":
+            microphoneRecordingStartedAt = nil
+            microphoneDroppedBaselineAt = nil
             queueMicrophoneControl(.stopVoice)
             OpenWatcherHomeActivityTracker.shared.record("processing", weight: 0.9)
         default:
+            microphoneRecordingStartedAt = nil
+            microphoneDroppedBaselineAt = nil
             queueMicrophoneControl(.stopVoice)
             OpenWatcherHomeActivityTracker.shared.record("idle", weight: 0.15)
         }
         log("state \(state.phase) active=\(state.active) message=\(state.message)")
+    }
+
+    private func checkMicrophoneSessionFault(_ health: MicrophonePipelineHealth, now: Date) {
+        guard !microphoneSessionFaulted,
+              SettingsStore.shared.settings.virtualMicrophoneEnabled,
+              SettingsStore.shared.settings.inputMode == .typeless,
+              typelessSessionActive || lastState?.phase == "recording",
+              let startedAt = microphoneRecordingStartedAt,
+              now.timeIntervalSince(startedAt) >= microphoneStreamStartGraceSeconds else {
+            return
+        }
+
+        let statsFresh = health.statsAge.map { $0 <= 2.5 } ?? false
+        if statsFresh && !health.deviceStreaming {
+            triggerMicrophoneSessionFault(reason: "device audio stream stopped during recording",
+                                          stopTypeless: true)
+            return
+        }
+        let packetAge = health.packetAge ?? now.timeIntervalSince(startedAt)
+        if statsFresh,
+           health.deviceStreaming,
+           packetAge >= microphoneStreamFaultSeconds {
+            triggerMicrophoneSessionFault(reason: String(format: "audio packets stalled for %.2fs", packetAge),
+                                          stopTypeless: true)
+            return
+        }
+        if health.latestPacketGapCount >= microphoneFatalPacketGap {
+            triggerMicrophoneSessionFault(reason: "audio packet gap reached \(health.latestPacketGapCount) frames",
+                                          stopTypeless: true)
+            return
+        }
+        if let baselineAt = microphoneDroppedBaselineAt,
+           now.timeIntervalSince(baselineAt) > 2.0 {
+            microphoneDroppedBaseline = health.devicePacketsDropped
+            microphoneDroppedBaselineAt = now
+        } else if health.devicePacketsDropped >= microphoneDroppedBaseline,
+                  health.devicePacketsDropped - microphoneDroppedBaseline >= microphoneFatalDroppedFrames {
+            triggerMicrophoneSessionFault(reason: "device dropped \(health.devicePacketsDropped - microphoneDroppedBaseline) frames",
+                                          stopTypeless: true)
+        }
+    }
+
+    private func triggerMicrophoneSessionFault(reason: String, stopTypeless: Bool) {
+        guard !microphoneSessionFaulted else { return }
+        microphoneSessionFaulted = true
+        microphoneRecordingStartedAt = nil
+        microphoneDroppedBaselineAt = nil
+        typelessSessionActive = false
+        typelessPrimaryIsDown = false
+        processingUntil = nil
+        processingStartedAt = nil
+        microphonePipeline.prepareForStreamRestart()
+        let faultState = VoiceState(active: false, phase: "error", message: "录音中断，按 A 重试")
+        lastState = faultState
+        BridgeStatusCenter.shared.microphoneStatus = "Interrupted"
+        BridgeStatusCenter.shared.typelessStatus = faultState.message
+        BridgeStatusCenter.shared.lastError = reason
+        if stopTypeless && isTypelessRunning() {
+            postTypelessToggleForFault()
+        }
+        if statusCharacteristic != nil {
+            write(faultState)
+        }
+        NSApp.requestUserAttention(.criticalRequest)
+        log("microphone session fault: \(reason); automatic resume disabled")
+    }
+
+    private func clearMicrophoneSessionFaultForRetry(source: String) {
+        guard microphoneSessionFaulted else { return }
+        microphoneSessionFaulted = false
+        microphonePipeline.prepareForStreamRestart()
+        microphoneDroppedBaseline = 0
+        microphoneDroppedBaselineAt = nil
+        lastState = VoiceState(active: false, phase: "idle", message: "")
+        BridgeStatusCenter.shared.microphoneStatus = "Ready"
+        BridgeStatusCenter.shared.typelessStatus = "Ready"
+        BridgeStatusCenter.shared.lastError = ""
+        log("microphone session fault cleared for retry source=\(source)")
+    }
+
+    private func postTypelessToggleForFault() {
+        let binding = SettingsStore.shared.settings.leftKey
+        guard let source = CGEventSource(stateID: .hidSystemState),
+              let down = CGEvent(keyboardEventSource: source,
+                                 virtualKey: CGKeyCode(binding.macKeyCode),
+                                 keyDown: true),
+              let up = CGEvent(keyboardEventSource: source,
+                               virtualKey: CGKeyCode(binding.macKeyCode),
+                               keyDown: false) else {
+            log("microphone fault could not synthesize Typeless stop shortcut")
+            return
+        }
+        suppressNextMicrophoneShortcut = true
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            self?.suppressNextMicrophoneShortcut = false
+        }
+        log("microphone fault sent Typeless stop shortcut \(binding.name)")
     }
 }
 

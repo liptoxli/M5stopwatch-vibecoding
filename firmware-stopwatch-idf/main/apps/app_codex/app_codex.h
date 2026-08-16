@@ -21,6 +21,7 @@ public:
 
 private:
     void handleBluetoothKeys();
+    void enterVoiceInterrupted(uint32_t now);
     void updateBatteryStatusBar(uint32_t now);
 
     static constexpr uint32_t kConfirmLongPressMs = 2000;
@@ -39,8 +40,11 @@ private:
     bool _voice_active = false;
     bool _applied_voice_active = false;
     bool _confirm_long_sent = false;
+    bool _voice_session_interrupted = false;
     uint32_t _primary_input_down_ms = 0;
     uint32_t _voice_mode_since_ms = 0;
+    uint32_t _fault_first_vibration_at_ms = 0;
+    uint32_t _fault_second_vibration_at_ms = 0;
     view::CodexView::VoiceMode _voice_mode = view::CodexView::VoiceMode::Idle;
     view::CodexView::VoiceMode _applied_voice_mode = view::CodexView::VoiceMode::Idle;
 };

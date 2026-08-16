@@ -643,19 +643,21 @@ void apply_voice_payload(const std::string& payload)
     ble_bridge::VoicePhase phase = g_host_voice_phase;
     bool parsed = false;
 
-    if (contains_any(lower, {"\"phase\":\"processing\"", "phase=processing", "processing", "处理中"})) {
+    if (contains_any(lower, {"\"phase\":\"error\"", "phase=error", "mic interrupted", "录音中断"})) {
+        active = false;
+        phase = ble_bridge::VoicePhase::Interrupted;
+        parsed = true;
+    } else if (contains_any(lower, {"\"phase\":\"processing\"", "phase=processing", "processing", "处理中"})) {
         active = true;
         phase = ble_bridge::VoicePhase::Processing;
         parsed = true;
-    }
-    if (contains_any(lower, {"\"voice_active\":true", "\"active\":true", "voice_active=1", "active=1", "recording", "listening"})) {
+    } else if (contains_any(lower, {"\"voice_active\":true", "\"active\":true", "voice_active=1", "active=1", "recording", "listening"})) {
         active = true;
         if (phase != ble_bridge::VoicePhase::Processing) {
             phase = ble_bridge::VoicePhase::Recording;
         }
         parsed = true;
-    }
-    if (contains_any(lower, {"\"voice_active\":false", "\"active\":false", "voice_active=0", "active=0", "idle", "stopped", "stop"})) {
+    } else if (contains_any(lower, {"\"voice_active\":false", "\"active\":false", "voice_active=0", "active=0", "idle", "stopped", "stop"})) {
         active = false;
         phase = ble_bridge::VoicePhase::Idle;
         parsed = true;
@@ -670,7 +672,9 @@ void apply_voice_payload(const std::string& payload)
     g_host_voice_active = active;
     g_host_voice_phase = phase;
     ++g_host_voice_sequence;
-    if (phase == ble_bridge::VoicePhase::Processing) {
+    if (phase == ble_bridge::VoicePhase::Interrupted) {
+        set_host_status("Mic interrupted");
+    } else if (phase == ble_bridge::VoicePhase::Processing) {
         set_host_status("Typeless processing");
     } else {
         set_host_status(active ? "Typeless recording" : "Typeless idle");
@@ -1359,6 +1363,16 @@ void set_voice_capture_active(bool active)
     } else {
         ble_microphone::end_voice_input();
     }
+}
+
+bool voice_session_interrupted()
+{
+    return ble_microphone::voice_session_interrupted();
+}
+
+void clear_voice_session_interruption()
+{
+    ble_microphone::clear_voice_session_interruption();
 }
 
 void send_typeless_option(ButtonAction action)

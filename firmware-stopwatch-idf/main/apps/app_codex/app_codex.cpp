@@ -51,15 +51,21 @@ void AppCodex::onOpen()
     _key_manager = std::make_unique<input::KeyManager>();
     _applied_quota_sequence = 0;
     _applied_ble_status_sequence = 0;
-    _applied_host_voice_sequence = ble_bridge::host_voice_sequence();
+    // Re-apply the current host state after the app opens. The Bridge can
+    // reconnect and deliver an interruption while the launcher is still on
+    // screen, and that latched fault must not be mistaken for an old update.
+    _applied_host_voice_sequence = 0;
     _applied_host_panel_sequence = ble_bridge::host_panel_sequence();
     _applied_ble_connected = ble_bridge::is_connected();
     _voice_active = false;
     _applied_voice_active = false;
     _confirm_long_sent = false;
+    _voice_session_interrupted = false;
     _voice_mode = view::CodexView::VoiceMode::Idle;
     _applied_voice_mode = view::CodexView::VoiceMode::Idle;
     _voice_mode_since_ms = GetHAL().millis();
+    _fault_first_vibration_at_ms = 0;
+    _fault_second_vibration_at_ms = 0;
     _last_view_update_ms = 0;
     _last_status_bar_update_ms = 0;
     _last_battery_check_ms = GetHAL().millis();
@@ -84,6 +90,21 @@ void AppCodex::onRunning()
     }
 
     handleBluetoothKeys();
+    const uint32_t now = GetHAL().millis();
+    if (ble_bridge::voice_session_interrupted()) {
+        enterVoiceInterrupted(now);
+    }
+    if (_fault_first_vibration_at_ms != 0 &&
+        static_cast<int32_t>(now - _fault_first_vibration_at_ms) >= 0) {
+        GetHAL().vibrate(160, 100);
+        _fault_first_vibration_at_ms = 0;
+        mclog::tagInfo(getAppInfo().name, "Voice interruption haptic 1/2");
+    } else if (_fault_second_vibration_at_ms != 0 &&
+        static_cast<int32_t>(now - _fault_second_vibration_at_ms) >= 0) {
+        GetHAL().vibrate(160, 100);
+        _fault_second_vibration_at_ms = 0;
+        mclog::tagInfo(getAppInfo().name, "Voice interruption haptic 2/2");
+    }
     if (_view && _view->consumeClearInputRequest()) {
         _voice_active = false;
         _voice_mode = view::CodexView::VoiceMode::Idle;
@@ -96,26 +117,37 @@ void AppCodex::onRunning()
         const auto previous_mode = _voice_mode;
         _voice_active = ble_bridge::host_voice_active();
         switch (ble_bridge::host_voice_phase()) {
+        case ble_bridge::VoicePhase::Interrupted:
+            enterVoiceInterrupted(now);
+            break;
         case ble_bridge::VoicePhase::Processing:
-            _voice_mode = view::CodexView::VoiceMode::Processing;
+            if (!_voice_session_interrupted) {
+                _voice_mode = view::CodexView::VoiceMode::Processing;
+            }
             break;
         case ble_bridge::VoicePhase::Recording:
-            _voice_mode = view::CodexView::VoiceMode::Recording;
+            if (!_voice_session_interrupted) {
+                _voice_mode = view::CodexView::VoiceMode::Recording;
+            }
             break;
         case ble_bridge::VoicePhase::Idle:
         default:
-            _voice_mode = view::CodexView::VoiceMode::Idle;
+            if (!_voice_session_interrupted) {
+                _voice_mode = view::CodexView::VoiceMode::Idle;
+            }
             break;
         }
         if (_voice_mode != previous_mode) {
             _voice_mode_since_ms = GetHAL().millis();
+        }
+        if (_voice_session_interrupted) {
+            _voice_active = false;
         }
         ble_bridge::set_voice_capture_active(_voice_mode == view::CodexView::VoiceMode::Recording);
         _applied_host_voice_sequence = host_voice_sequence;
         mclog::tagDebug(getAppInfo().name, "Typeless host voice correction: {}", _voice_active);
     }
 
-    const uint32_t now = GetHAL().millis();
     if (_voice_mode == view::CodexView::VoiceMode::Processing &&
         now - _voice_mode_since_ms > 5000) {
         _voice_active = false;
@@ -187,6 +219,21 @@ void AppCodex::onRunning()
     }
 }
 
+void AppCodex::enterVoiceInterrupted(uint32_t now)
+{
+    if (_voice_session_interrupted) {
+        return;
+    }
+    _voice_session_interrupted = true;
+    _voice_active = false;
+    _voice_mode = view::CodexView::VoiceMode::Interrupted;
+    _voice_mode_since_ms = now;
+    ble_bridge::set_voice_capture_active(false);
+    _fault_first_vibration_at_ms = now + 300;
+    _fault_second_vibration_at_ms = now + 760;
+    mclog::tagInfo(getAppInfo().name, "Voice session interrupted; waiting for retry");
+}
+
 void AppCodex::updateBatteryStatusBar(uint32_t now)
 {
     if (!view::is_status_bar_created()) {
@@ -210,6 +257,19 @@ void AppCodex::handleBluetoothKeys()
     if (hal.btnA.wasPressed()) {
         const uint32_t now = GetHAL().millis();
         const bool typeless_mode = ble_bridge::is_typeless_input_mode();
+        if (_voice_session_interrupted) {
+            if (!ble_bridge::is_connected()) {
+                GetHAL().vibrate(90, 120);
+                mclog::tagDebug(getAppInfo().name, "Voice retry waiting for BLE");
+                return;
+            }
+            _voice_session_interrupted = false;
+            _fault_first_vibration_at_ms = 0;
+            _fault_second_vibration_at_ms = 0;
+            ble_bridge::clear_voice_session_interruption();
+            _voice_active = false;
+            mclog::tagInfo(getAppInfo().name, "Voice interruption cleared by A retry");
+        }
         const bool starting_voice = !typeless_mode || !_voice_active;
         _primary_input_down_ms = now;
         if (typeless_mode && _voice_active) {
@@ -238,7 +298,8 @@ void AppCodex::handleBluetoothKeys()
     }
 
     if (hal.btnB.wasPressed()) {
-        _confirm_long_sent = false;
+    _confirm_long_sent = false;
+    _voice_session_interrupted = false;
         mclog::tagDebug(getAppInfo().name, "BLE key B: confirm down");
     }
 
@@ -287,6 +348,9 @@ void AppCodex::onClose()
     _voice_mode = view::CodexView::VoiceMode::Idle;
     _applied_voice_mode = view::CodexView::VoiceMode::Idle;
     _voice_mode_since_ms = GetHAL().millis();
+    _fault_first_vibration_at_ms = 0;
+    _fault_second_vibration_at_ms = 0;
+    ble_bridge::clear_voice_session_interruption();
     _last_battery_check_ms = 0;
     _last_status_bar_update_ms = 0;
     _quota_client.stop();

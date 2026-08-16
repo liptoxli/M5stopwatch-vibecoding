@@ -26,6 +26,7 @@ public:
         Idle,
         Recording,
         Processing,
+        Interrupted,
     };
 
     struct QuotaSlot {
