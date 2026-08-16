@@ -24,7 +24,7 @@ fi
 grep -Fq "FirmwareVersion = \"V$version\"" \
     "$repo_root/firmware-stopwatch-idf/main/apps/common/common.h"
 grep -Fq "version-v$version-" "$repo_root/README.md"
-grep -Fq "当前公开版本是 **v$version**" "$repo_root/README.md"
+grep -Fq "当前固件版本是 **v$version**" "$repo_root/README.md"
 grep -Fq "## [$version]" "$repo_root/CHANGELOG.md"
 grep -Fq "## [$bridge_version]" "$repo_root/tools/typeless_bridge/CHANGELOG.md"
 grep -Fq "Bridge 版本为 **v$bridge_version**" "$repo_root/README.md"
