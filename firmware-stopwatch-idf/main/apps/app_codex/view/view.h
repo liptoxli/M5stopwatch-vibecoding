@@ -76,6 +76,7 @@ public:
     void setVoiceActive(bool active);
     void setVoiceMode(VoiceMode mode);
     bool consumeClearInputRequest();
+    uint32_t frameIntervalMs() const;
 
 private:
     struct SemicircleQuota {
@@ -85,12 +86,6 @@ private:
         std::unique_ptr<uitk::lvgl_cpp::Label> remainingCaption;
         std::unique_ptr<uitk::lvgl_cpp::Label> remainingValue;
         std::unique_ptr<uitk::lvgl_cpp::Label> resetLabel;
-    };
-
-    struct V2QuotaRing {
-        std::unique_ptr<uitk::lvgl_cpp::Label> percentLabel;
-        std::unique_ptr<uitk::lvgl_cpp::Label> resetLabel;
-        std::unique_ptr<uitk::lvgl_cpp::Label> titleLabel;
     };
 
     std::unique_ptr<uitk::lvgl_cpp::Container> _panel;
@@ -121,11 +116,20 @@ private:
     std::unique_ptr<uitk::lvgl_cpp::Container> _wifi_dot;
     std::unique_ptr<uitk::lvgl_cpp::Container> _v2_canvas;
     std::unique_ptr<uitk::lvgl_cpp::Label> _v2_title_label;
-    std::unique_ptr<uitk::lvgl_cpp::Label> _v2_context_label;
+    std::unique_ptr<uitk::lvgl_cpp::Label> _v2_left_caption_label;
+    std::unique_ptr<uitk::lvgl_cpp::Label> _v2_remaining_value_label;
+    std::unique_ptr<uitk::lvgl_cpp::Label> _v2_remaining_unit_label;
+    std::unique_ptr<uitk::lvgl_cpp::Label> _v2_today_caption_label;
+    std::unique_ptr<uitk::lvgl_cpp::Label> _v2_today_value_label;
     std::unique_ptr<uitk::lvgl_cpp::Label> _v2_status_label;
     std::unique_ptr<uitk::lvgl_cpp::Label> _v2_meta_left_label;
     std::unique_ptr<uitk::lvgl_cpp::Label> _v2_meta_right_label;
-    V2QuotaRing _v2_week_ring;
+    std::unique_ptr<uitk::lvgl_cpp::Container> _v2_sync_indicator;
+    std::unique_ptr<uitk::lvgl_cpp::Container> _v2_sync_left_line;
+    std::unique_ptr<uitk::lvgl_cpp::Container> _v2_sync_right_line;
+    std::unique_ptr<uitk::lvgl_cpp::Container> _v2_sync_dot;
+    std::array<int, 9> _voice_bar_heights = {{-1, -1, -1, -1, -1, -1, -1, -1, -1}};
+    std::array<int, 9> _voice_bar_opacities = {{-1, -1, -1, -1, -1, -1, -1, -1, -1}};
 
     State _state;
     uint32_t _last_quota_update_tick = 0;
@@ -165,12 +169,6 @@ private:
     void initFlipClock();
     void updateFlipClock(bool force = false);
     void initOpenWatcherV2();
-    void initV2QuotaRing(V2QuotaRing& ring,
-                         const char* title,
-                         lv_color_t color,
-                         int centerX,
-                         int centerY);
-    void updateV2QuotaRing(V2QuotaRing& ring, const QuotaSlot& slot, const char* title);
     void updateOpenWatcherV2Labels();
     static void drawOpenWatcherV2Event(lv_event_t* event);
     void drawOpenWatcherV2(lv_layer_t* layer, const lv_area_t& coords);

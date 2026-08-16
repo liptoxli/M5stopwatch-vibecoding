@@ -21,6 +21,7 @@ bool is_enabled();
 bool is_connected();
 bool disconnect_current();
 bool is_typeless_input_mode();
+void set_voice_capture_active(bool active);
 
 void send_typeless_option(ButtonAction action);
 void send_codex_enter();

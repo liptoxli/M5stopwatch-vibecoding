@@ -2,6 +2,32 @@
 
 Mac Bridge 使用独立语义化版本。固件与 Bridge 的兼容版本关系见仓库根目录 [README](../../README.md#版本历史)。
 
+## [1.1.5] - 2026-08-16
+
+### Changed
+
+- 新固件连接后进入按需麦克风待机，空闲时虚拟输入保持可用并输出静音，不再持续消耗 BLE 音频带宽。
+- 监控用户原有的 Typeless 主快捷键，使用 Mac 键盘启动听写时也会立即请求设备开始音频流。
+- Typeless 进入 Processing 或 Idle 后请求设备停止音频；设备保留短尾段以避免切换瞬间截断。
+
+### Compatibility
+
+- 新 Bridge 连接旧固件时会自动回退到连续音频模式，不影响现有虚拟麦克风功能。
+
+## [1.1.4] - 2026-08-16
+
+### Changed
+
+- 录音、处理和空闲状态继续通过轻量状态 characteristic 实时同步。
+- 状态变化不再连带推送完整额度面板，减少设备端静态 UI 重绘；额度仍在连接成功和定时刷新时推送。
+
+## [1.1.3] - 2026-08-16
+
+### Fixed
+
+- Typeless 模式下 A 键按下恢复为切换录音，松开不再立即停止。
+- Processing 状态下再次按 A 会直接开始新录音，本地会话状态不再被 Typeless 的短暂 idle 检测覆盖。
+
 ## [1.1.2] - 2026-08-16
 
 ### Fixed
@@ -71,6 +97,9 @@ Mac Bridge 使用独立语义化版本。固件与 Bridge 的兼容版本关系�
 - 支持 `M5Codex-*` 连接、Codex 额度推送、输入模式和按键配置同步。
 - 支持 Typeless 状态观察、LaunchAgent 安装和 arm64 ZIP 发布包。
 
+[1.1.5]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.1.5
+[1.1.4]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.1.4
+[1.1.3]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.1.3
 [1.1.2]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.1.2
 [1.1.1]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.1.1
 [1.1.0]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.1.0

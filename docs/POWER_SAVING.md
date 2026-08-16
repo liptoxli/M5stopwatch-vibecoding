@@ -15,8 +15,7 @@
 空闲 1 分钟后：
 
 - 屏幕亮度降到 `10%`。
-- 启用 ESP-IDF power management 的低频配置。
-- CPU 频率从最高 `240MHz` 降到 `80MHz`。
+- 如果当前构建启用了 ESP-IDF power management，CPU 最高频率从 `240MHz` 降到 `80MHz`。
 - 不保存这个临时亮度，唤醒后恢复用户原亮度。
 
 触摸、按键或移动设备后会恢复亮度和 CPU 频率。
@@ -88,16 +87,18 @@ light_sleep_enable = false
 
 这里没有启用自动 light sleep，因为屏幕、BLE、LVGL、触摸和音频链路都需要稳定验证。当前策略先用“明确的空闲状态切换”控制功耗，降低不确定性。
 
+已有 `sdkconfig` 会覆盖 `sdkconfig.defaults`；构建时应确认最终生成的 `sdkconfig` 中 `CONFIG_PM_ENABLE=y`，否则 1 分钟阶段只会降低屏幕亮度，CPU 降频代码不会生效。
+
 ## 音频策略
 
-音效保留，音频输入关闭：
+音效和 StopWatch 麦克风都保留：
 
 ```text
 kEnableAudioOutput = true
-kEnableAudioInput = false
+kEnableAudioInput = true
 ```
 
-这样仍保留开机音、按键音和提示音，但不会启用麦克风录音链路。音频输出任务在空闲时会关闭 speaker amp，避免放大器持续耗电。
+音频输出任务在空闲时会关闭 speaker amp。开启 macOS 菜单中的 `M5 StopWatch Mic` 后，虚拟输入设备和 BLE 连接保持就绪；只有开始语音输入时才采集 44.1kHz 输入、压缩为 16kHz IMA-ADPCM，并以 20ms 一帧通过 BLE 发送。停止后保留 400ms 尾段，再停止采集、编码和音频通知。I2S 输入和 codec 输入通道目前仍在系统初始化时保持启用。
 
 ## BLE 策略
 
@@ -110,9 +111,13 @@ BLE 是核心交互通道，默认保留：
 
 因此 activity sleep 不会主动关闭 BLE。PMIC 关机后 BLE 会断开，重新开机后再次广播。
 
+麦克风流继续使用 15ms BLE 连接间隔。空闲时 BLE、HID、额度和状态连接仍保持，但音频包停止；AMOLED 在 3 分钟阶段关闭后，A 键仍可唤醒屏幕并本地启动音频。
+
+固件 v0.7.2 已把第二套 UI 的动态刷新降到 10 FPS，并将静态额度画布、文字和录音波形改为差分更新；v0.7.3 进一步在空闲时停止音频采集、编码和通知。
+
 ## 体验取舍
 
 - 普通省电恢复快，适合桌面轻度使用。
 - PMIC 自动关机是最终兜底，恢复等同重新启动，耗时更长。
 - Wi-Fi 默认关闭，减少发热；需要远端能力时由用户显式开启。
-- 音频输出保留，输入关闭，兼顾反馈音和功耗。
+- 音频输出保留；麦克风输入按需启动，兼顾反馈音、语音输入和功耗。
