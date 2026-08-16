@@ -2,7 +2,7 @@
 
 StopWatch BLE Bridge is the macOS companion app for the M5 StopWatch Codex firmware.
 
-Current version: **v1.1.1**. Full version history: [CHANGELOG.md](CHANGELOG.md).
+Current version: **v1.1.2**. Full version history: [CHANGELOG.md](CHANGELOG.md).
 
 It provides local functions including:
 
@@ -51,6 +51,8 @@ Virtual microphone mode is off by default. When enabled, the Bridge:
 3. Sends `Start`; the device captures continuously in 20 ms frames.
 4. Decodes 4-bit IMA-ADPCM to 16-bit, 16 kHz mono PCM and writes it to the hidden driver output.
 5. Sends `Stop` and restores the previous input when the mode is disabled.
+
+Bridge v1.1.2 also monitors BLE packet arrival, ADPCM decoding and the Core Audio render callback independently. If macOS stops the virtual output engine while the BLE stream remains connected, the Bridge rebuilds only that output engine and keeps the device connection and original-input restore state intact.
 
 Each BLE packet carries 320 decoded samples (20 ms): 14 bytes of protocol header plus 160 bytes of ADPCM. The steady wire rate is about 8.7 KB/s, while decoded PCM is 32 KB/s. No WAV container or recording file is used.
 
@@ -188,14 +190,14 @@ tools/typeless_bridge/build_stopwatch_ble_bridge.sh
 ## Package Release
 
 ```bash
-tools/typeless_bridge/package_release.sh 1.1.1
+tools/typeless_bridge/package_release.sh 1.1.2
 ```
 
 This creates:
 
 ```text
-dist/StopWatch-BLE-Bridge-1.1.1-macOS-arm64.zip
-dist/StopWatch-BLE-Bridge-1.1.1-macOS-arm64.zip.sha256
+dist/StopWatch-BLE-Bridge-1.1.2-macOS-arm64.zip
+dist/StopWatch-BLE-Bridge-1.1.2-macOS-arm64.zip.sha256
 ```
 
 The release package contains only the app bundle. It does not install the LaunchAgent or start the app automatically.
@@ -204,7 +206,7 @@ To build the product installer that installs the app, login LaunchAgent, and
 `M5 StopWatch Mic` Core Audio driver together:
 
 ```bash
-tools/typeless_bridge/package_product_installer.sh 1.1.1
+tools/typeless_bridge/package_product_installer.sh 1.1.2
 ```
 
 The `.pkg` requires administrator authorization because it writes the audio

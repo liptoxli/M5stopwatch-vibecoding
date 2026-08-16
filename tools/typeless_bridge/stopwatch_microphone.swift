@@ -11,6 +11,7 @@ let stopWatchMicrophoneStatsUUID = CBUUID(string: "7D2F0004-5CF1-4F3C-9F42-A8C8F
 let stopWatchVirtualMicrophoneName = "M5 StopWatch Mic"
 
 private let microphoneSampleRate = 16_000.0
+private let microphoneOutputStallSeconds: TimeInterval = 2.5
 private let imaIndexTable = [-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8]
 private let imaStepTable = [
     7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31,
@@ -60,6 +61,41 @@ private final class MicrophoneAudioRing {
             readIndex = (readIndex + 1) % samples.count
             count -= 1
         }
+    }
+}
+
+struct MicrophonePipelineHealth {
+    let outputConfigured: Bool
+    let engineRunning: Bool
+    let outputHealthy: Bool
+    let outputAge: TimeInterval?
+    let renderAge: TimeInterval?
+    let renderCount: UInt64
+    let packetAge: TimeInterval?
+    let packetCount: UInt64
+    let lostPacketCount: UInt64
+    let decodedRMS: Double
+    let statsAge: TimeInterval?
+    let deviceStreaming: Bool
+    let deviceAudioSubscribed: Bool
+    let devicePacketsSent: UInt32
+    let devicePacketsDropped: UInt32
+}
+
+private final class MicrophoneRenderHeartbeat {
+    private let lock = NSLock()
+    private var lastRenderAt: Date?
+    private var renderCount: UInt64 = 0
+
+    func markRendered() {
+        lock.lock(); defer { lock.unlock() }
+        lastRenderAt = Date()
+        renderCount &+= 1
+    }
+
+    func snapshot(now: Date) -> (age: TimeInterval?, count: UInt64) {
+        lock.lock(); defer { lock.unlock() }
+        return (lastRenderAt.map { now.timeIntervalSince($0) }, renderCount)
     }
 }
 
@@ -137,6 +173,8 @@ private enum MicrophoneCoreAudio {
 
 private final class VirtualMicrophoneOutput {
     private let engine = AVAudioEngine()
+    private let heartbeat = MicrophoneRenderHeartbeat()
+    private let startedAt = Date()
     private var source: AVAudioSourceNode!
 
     init(ring: MicrophoneAudioRing, device: AudioDeviceID) throws {
@@ -144,13 +182,14 @@ private final class VirtualMicrophoneOutput {
                                          channels: 1, interleaved: false) else {
             throw NSError(domain: "M5StopWatchMic", code: 1, userInfo: [NSLocalizedDescriptionKey: "Cannot create audio format"])
         }
-        source = AVAudioSourceNode(format: format) { [weak ring] _, _, frameCount, list in
+        source = AVAudioSourceNode(format: format) { [weak ring, weak heartbeat] _, _, frameCount, list in
             let buffers = UnsafeMutableAudioBufferListPointer(list)
             guard let pointer = buffers.first?.mData?.assumingMemoryBound(to: Float.self) else { return noErr }
             ring?.render(into: pointer, frames: Int(frameCount))
             for index in 1..<buffers.count {
                 buffers[index].mData?.assumingMemoryBound(to: Float.self).update(from: pointer, count: Int(frameCount))
             }
+            heartbeat?.markRendered()
             return noErr
         }
         engine.attach(source)
@@ -169,6 +208,15 @@ private final class VirtualMicrophoneOutput {
     }
 
     func stop() { engine.stop() }
+
+    func health(now: Date) -> (engineRunning: Bool, healthy: Bool, outputAge: TimeInterval,
+                               renderAge: TimeInterval?, renderCount: UInt64) {
+        let render = heartbeat.snapshot(now: now)
+        let outputAge = now.timeIntervalSince(startedAt)
+        let renderResponsive = (render.age.map { $0 <= microphoneOutputStallSeconds })
+            ?? (outputAge <= microphoneOutputStallSeconds)
+        return (engine.isRunning, engine.isRunning && renderResponsive, outputAge, render.age, render.count)
+    }
 }
 
 final class StopWatchMicrophonePipeline {
@@ -177,11 +225,18 @@ final class StopWatchMicrophonePipeline {
     private var previousInput: AudioDeviceID?
     private var expectedSequence: UInt16?
     private var expectedSampleIndex: UInt32?
+    private var lastPacketAt: Date?
+    private var lastStatsAt: Date?
+    private var lastDecodedRMS: Double = 0
+    private var deviceStreaming = false
+    private var deviceAudioSubscribed = false
+    private var devicePacketsSent: UInt32 = 0
+    private var devicePacketsDropped: UInt32 = 0
     private(set) var outputDeviceName: String?
     private(set) var packetCount: UInt64 = 0
     private(set) var lostPacketCount: UInt64 = 0
 
-    var isRunning: Bool { output != nil }
+    var isRunning: Bool { output?.health(now: Date()).healthy == true }
 
     func start() throws -> String {
         if let outputDeviceName, output != nil { return outputDeviceName }
@@ -190,13 +245,41 @@ final class StopWatchMicrophonePipeline {
                           userInfo: [NSLocalizedDescriptionKey: "Virtual microphone is not installed: \(stopWatchVirtualMicrophoneName)"])
         }
         ring.reset(); resetTracking()
-        previousInput = MicrophoneCoreAudio.defaultInput()
+        if previousInput == nil {
+            previousInput = MicrophoneCoreAudio.defaultInput()
+        }
         output = try VirtualMicrophoneOutput(ring: ring, device: device.output)
         do { try MicrophoneCoreAudio.setDefaultInput(device.input) }
         catch { output?.stop(); output = nil; throw error }
         outputDeviceName = device.name
         return device.name
     }
+
+    func restartOutput() throws -> String {
+        guard let device = MicrophoneCoreAudio.virtualDevice() else {
+            throw NSError(domain: "M5StopWatchMic", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey: "Virtual microphone is not installed: \(stopWatchVirtualMicrophoneName)"])
+        }
+        output?.stop()
+        output = nil
+        ring.reset()
+        let replacement = try VirtualMicrophoneOutput(ring: ring, device: device.output)
+        do {
+            try MicrophoneCoreAudio.setDefaultInput(device.input)
+        } catch {
+            replacement.stop()
+            throw error
+        }
+        output = replacement
+        outputDeviceName = device.name
+        return device.name
+    }
+
+#if DEBUG
+    func stopOutputForTesting() {
+        output?.stop()
+    }
+#endif
 
     func stop() {
         output?.stop(); output = nil
@@ -217,6 +300,11 @@ final class StopWatchMicrophonePipeline {
         guard data[2] == 1, sampleCount > 0, sampleCount <= 4096,
               stepIndex < imaStepTable.count, data.count == header + encodedCount else { return false }
 
+        if let expectedSampleIndex, sampleIndex < expectedSampleIndex {
+            self.expectedSequence = nil
+            self.expectedSampleIndex = nil
+            lostPacketCount = 0
+        }
         if let expectedSequence, sequence != expectedSequence { lostPacketCount += UInt64(sequence &- expectedSequence) }
         expectedSequence = sequence &+ 1
         if let expectedSampleIndex, sampleIndex > expectedSampleIndex {
@@ -227,6 +315,7 @@ final class StopWatchMicrophonePipeline {
 
         predictor = max(-32768, min(32767, predictor))
         var pcm = Array(repeating: Int16(0), count: sampleCount)
+        var squaredSampleSum = Double(predictor * predictor)
         pcm[0] = Int16(predictor)
         for offset in 1..<sampleCount {
             let codeOffset = offset - 1
@@ -241,19 +330,60 @@ final class StopWatchMicrophonePipeline {
             predictor = max(-32768, min(32767, predictor))
             stepIndex = max(0, min(88, stepIndex + imaIndexTable[code]))
             pcm[offset] = Int16(predictor)
+            squaredSampleSum += Double(predictor * predictor)
         }
         packetCount += 1
+        lastPacketAt = Date()
+        lastDecodedRMS = sqrt(squaredSampleSum / Double(sampleCount)) / 32_768.0
         ring.append(pcm)
         return true
     }
 
     func statsDescription(_ data: Data) -> String? {
         guard data.count >= 20 else { return nil }
-        return "v\(data[0]) stream=\(data[1] != 0) rate=\(read32(data, 4)) sent=\(read32(data, 8)) dropped=\(read32(data, 12))"
+        lastStatsAt = Date()
+        deviceStreaming = data[1] != 0
+        deviceAudioSubscribed = data[2] != 0
+        devicePacketsSent = read32(data, 8)
+        devicePacketsDropped = read32(data, 12)
+        return "v\(data[0]) stream=\(deviceStreaming) rate=\(read32(data, 4)) sent=\(devicePacketsSent) dropped=\(devicePacketsDropped)"
+    }
+
+    func prepareForStreamRestart() {
+        expectedSequence = nil
+        expectedSampleIndex = nil
+        packetCount = 0
+        lostPacketCount = 0
+        lastPacketAt = nil
+        lastDecodedRMS = 0
+    }
+
+    func health(now: Date = Date()) -> MicrophonePipelineHealth {
+        let outputHealth = output?.health(now: now)
+        return MicrophonePipelineHealth(
+            outputConfigured: output != nil,
+            engineRunning: outputHealth?.engineRunning ?? false,
+            outputHealthy: outputHealth?.healthy ?? false,
+            outputAge: outputHealth?.outputAge,
+            renderAge: outputHealth?.renderAge,
+            renderCount: outputHealth?.renderCount ?? 0,
+            packetAge: lastPacketAt.map { now.timeIntervalSince($0) },
+            packetCount: packetCount,
+            lostPacketCount: lostPacketCount,
+            decodedRMS: lastDecodedRMS,
+            statsAge: lastStatsAt.map { now.timeIntervalSince($0) },
+            deviceStreaming: deviceStreaming,
+            deviceAudioSubscribed: deviceAudioSubscribed,
+            devicePacketsSent: devicePacketsSent,
+            devicePacketsDropped: devicePacketsDropped
+        )
     }
 
     private func resetTracking() {
         expectedSequence = nil; expectedSampleIndex = nil; packetCount = 0; lostPacketCount = 0
+        lastPacketAt = nil; lastStatsAt = nil; lastDecodedRMS = 0
+        deviceStreaming = false; deviceAudioSubscribed = false
+        devicePacketsSent = 0; devicePacketsDropped = 0
     }
     private func read16(_ data: Data, _ offset: Int) -> UInt16 {
         UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)

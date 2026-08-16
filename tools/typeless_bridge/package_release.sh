@@ -24,7 +24,7 @@ rm -rf "$WORK_DIR" "$ZIP_PATH" "$ZIP_PATH.sha256"
 mkdir -p "$WORK_DIR" "$DIST_DIR"
 mkdir -p "$ICON_MODULE_CACHE_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
-cp "$BUILD_BIN" "$BIN"
+cp -X "$BUILD_BIN" "$BIN"
 chmod 755 "$BIN"
 
 ICONSET="$RESOURCES_DIR/StopWatchBridge.iconset"
@@ -85,7 +85,7 @@ else
   echo "Skipping codesign. Run tools/typeless_bridge/create_local_codesign_identity.sh once for stable Accessibility permission across updates."
 fi
 
-/usr/bin/ditto -c -k --noextattr --noqtn --keepParent "$APP_DIR" "$TMP_ZIP_PATH"
+/usr/bin/ditto -c -k --norsrc --noextattr --noqtn --noacl --keepParent "$APP_DIR" "$TMP_ZIP_PATH"
 cp "$TMP_ZIP_PATH" "$ZIP_PATH"
 /usr/bin/shasum -a 256 "$ZIP_PATH" > "$ZIP_PATH.sha256"
 

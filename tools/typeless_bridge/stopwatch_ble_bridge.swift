@@ -1760,6 +1760,9 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private var wechatHeldBinding: KeyBinding?
     private var typelessPrimaryDownAt: Date?
     private var lastRediscoverAt = Date.distantPast
+    private var lastMicrophoneRecoveryAt = Date.distantPast
+    private var lastMicrophoneHealthLogAt = Date.distantPast
+    private var microphoneResubscribePending = false
     private var lastBridgeConfigPayload: String?
     private var statusWriteQueue: [(payload: String, label: String)] = []
     private var statusWriteInFlight = false
@@ -1964,15 +1967,25 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
                     error: Error?) {
         if characteristic.uuid == stopWatchMicrophoneAudioUUID || characteristic.uuid == stopWatchMicrophoneStatsUUID {
             if let error {
+                microphoneResubscribePending = false
                 BridgeStatusCenter.shared.microphoneStatus = "Subscribe failed"
                 BridgeStatusCenter.shared.lastError = error.localizedDescription
+                log("Microphone subscription failed: \(error.localizedDescription)")
                 return
             }
-            if characteristic.uuid == stopWatchMicrophoneAudioUUID,
-               characteristic.isNotifying,
-               SettingsStore.shared.settings.virtualMicrophoneEnabled {
-                sendMicrophoneControl(start: true)
-                BridgeStatusCenter.shared.microphoneStatus = "Streaming"
+            if characteristic.uuid == stopWatchMicrophoneAudioUUID {
+                if !characteristic.isNotifying,
+                   microphoneResubscribePending,
+                   SettingsStore.shared.settings.virtualMicrophoneEnabled {
+                    peripheral.setNotifyValue(true, for: characteristic)
+                    return
+                }
+                if characteristic.isNotifying,
+                   SettingsStore.shared.settings.virtualMicrophoneEnabled {
+                    microphoneResubscribePending = false
+                    sendMicrophoneControl(start: true)
+                    BridgeStatusCenter.shared.microphoneStatus = "Streaming"
+                }
             }
             return
         }
@@ -2109,6 +2122,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         statusWriteQueue.removeAll()
         statusWriteInFlight = false
         bridgeDiscoveryInFlight = false
+        microphoneResubscribePending = false
     }
 
     private func discoverBridgeServices(_ peripheral: CBPeripheral, reason: String) {
@@ -2123,6 +2137,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
 
     func setVirtualMicrophoneEnabled(_ enabled: Bool) {
         guard enabled else {
+            microphoneResubscribePending = false
             sendMicrophoneControl(start: false)
             if let peripheral, let audio = microphoneAudioCharacteristic, audio.isNotifying {
                 peripheral.setNotifyValue(false, for: audio)
@@ -2160,6 +2175,9 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
 
     private func sendMicrophoneControl(start: Bool) {
         guard let peripheral, let control = microphoneControlCharacteristic else { return }
+        if start {
+            microphonePipeline.prepareForStreamRestart()
+        }
         let type: CBCharacteristicWriteType = control.properties.contains(.write) ? .withResponse : .withoutResponse
         peripheral.writeValue(Data([start ? 1 : 0]), for: control, type: type)
         log("microphone control: \(start ? "start" : "stop")")
@@ -2184,9 +2202,15 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         let missingBridge = eventCharacteristic == nil ||
             statusCharacteristic == nil ||
             !eventNotifyEnabled
+        let microphoneEnabled = SettingsStore.shared.settings.virtualMicrophoneEnabled
+        let missingMicrophone = microphoneEnabled && (
+            microphoneControlCharacteristic == nil ||
+            microphoneAudioCharacteristic == nil ||
+            microphoneStatsCharacteristic == nil
+        )
 
-        if missingBridge && Date().timeIntervalSince(lastRediscoverAt) > 8 {
-            log("Bridge health check: rediscovering services/characteristics.")
+        if (missingBridge || missingMicrophone) && Date().timeIntervalSince(lastRediscoverAt) > 8 {
+            log("Bridge health check: rediscovering services/characteristics bridge=\(missingBridge) microphone=\(missingMicrophone).")
             discoverBridgeServices(peripheral, reason: "health")
         }
 
@@ -2205,6 +2229,80 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         }
         if statusCharacteristic != nil && pollTimer == nil {
             startStatusLoop()
+        }
+        if microphoneEnabled {
+            runMicrophoneHealthCheck(peripheral, now: Date())
+        }
+    }
+
+    private func runMicrophoneHealthCheck(_ peripheral: CBPeripheral, now: Date) {
+        guard let audio = microphoneAudioCharacteristic else {
+            BridgeStatusCenter.shared.microphoneStatus = "Waiting for BLE"
+            return
+        }
+
+        let health = microphonePipeline.health(now: now)
+        if now.timeIntervalSince(lastMicrophoneHealthLogAt) >= 30 {
+            lastMicrophoneHealthLogAt = now
+            let packetAge = health.packetAge.map { String(format: "%.2f", $0) } ?? "--"
+            let renderAge = health.renderAge.map { String(format: "%.2f", $0) } ?? "--"
+            log(String(format: "microphone health engine=%@ output=%@ render_age=%@ packet_age=%@ packets=%llu lost=%llu rms=%.5f device_stream=%@ subscribed=%@ sent=%u dropped=%u",
+                       health.engineRunning ? "running" : "stopped",
+                       health.outputHealthy ? "healthy" : "stalled",
+                       renderAge,
+                       packetAge,
+                       health.packetCount,
+                       health.lostPacketCount,
+                       health.decodedRMS,
+                       health.deviceStreaming ? "true" : "false",
+                       health.deviceAudioSubscribed ? "true" : "false",
+                       health.devicePacketsSent,
+                       health.devicePacketsDropped))
+        }
+
+        if !health.outputHealthy,
+           now.timeIntervalSince(lastMicrophoneRecoveryAt) >= 4 {
+            lastMicrophoneRecoveryAt = now
+            BridgeStatusCenter.shared.microphoneStatus = "Recovering output"
+            do {
+                let name = health.outputConfigured
+                    ? try microphonePipeline.restartOutput()
+                    : try microphonePipeline.start()
+                BridgeStatusCenter.shared.microphoneStatus = audio.isNotifying
+                    ? "Streaming" : (name == stopWatchVirtualMicrophoneName ? "Ready" : "Ready (BlackHole fallback)")
+                log("microphone output recovered: engine rebuilt device=\(name)")
+            } catch {
+                BridgeStatusCenter.shared.microphoneStatus = "Output failed"
+                BridgeStatusCenter.shared.lastError = error.localizedDescription
+                log("microphone output recovery failed: \(error.localizedDescription)")
+            }
+            return
+        }
+
+        let streamAge = health.packetAge ?? health.outputAge ?? 0
+        let statsFresh = health.statsAge.map { $0 <= 3.0 } ?? false
+        if health.outputHealthy,
+           statsFresh,
+           health.deviceStreaming,
+           streamAge > 3.0,
+           now.timeIntervalSince(lastMicrophoneRecoveryAt) >= 4 {
+            lastMicrophoneRecoveryAt = now
+            BridgeStatusCenter.shared.microphoneStatus = "Recovering stream"
+            if audio.isNotifying {
+                microphoneResubscribePending = true
+                peripheral.setNotifyValue(false, for: audio)
+                log("microphone stream stalled: cycling audio notification subscription")
+            } else {
+                peripheral.setNotifyValue(true, for: audio)
+                log("microphone stream stalled: restoring audio notification subscription")
+            }
+            return
+        }
+
+        if !audio.isNotifying && !microphoneResubscribePending {
+            peripheral.setNotifyValue(true, for: audio)
+        } else if health.outputHealthy && (health.packetAge.map { $0 <= 3.0 } ?? false) {
+            BridgeStatusCenter.shared.microphoneStatus = "Streaming"
         }
     }
 

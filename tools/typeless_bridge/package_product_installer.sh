@@ -29,10 +29,10 @@ mkdir -p "$PACKAGE_ROOT/Library/Audio/Plug-Ins/HAL"
 mkdir -p "$PACKAGE_ROOT/Library/LaunchAgents"
 mkdir -p "$PACKAGE_SCRIPTS"
 
-cp -R "$APP_SOURCE" "$PACKAGE_ROOT/Applications/StopWatch BLE Bridge.app"
-cp -R "$WORK_DIR/driver/M5StopWatchMic.driver" "$PACKAGE_ROOT/Library/Audio/Plug-Ins/HAL/"
-cp "$SCRIPT_DIR/product_launch_agent.plist" "$PACKAGE_ROOT/Library/LaunchAgents/dev.vibecoding.stopwatch-ble-bridge.plist"
-cp "$SCRIPT_DIR/virtual_mic_driver/postinstall" "$PACKAGE_SCRIPTS/postinstall"
+cp -R -X "$APP_SOURCE" "$PACKAGE_ROOT/Applications/StopWatch BLE Bridge.app"
+cp -R -X "$WORK_DIR/driver/M5StopWatchMic.driver" "$PACKAGE_ROOT/Library/Audio/Plug-Ins/HAL/"
+cp -X "$SCRIPT_DIR/product_launch_agent.plist" "$PACKAGE_ROOT/Library/LaunchAgents/dev.vibecoding.stopwatch-ble-bridge.plist"
+cp -X "$SCRIPT_DIR/virtual_mic_driver/postinstall" "$PACKAGE_SCRIPTS/postinstall"
 chmod 755 "$PACKAGE_SCRIPTS/postinstall"
 /usr/bin/xattr -cr "$PACKAGE_ROOT" 2>/dev/null || true
 
@@ -46,7 +46,7 @@ PKG_ARGS=(
 if [[ -n "${INSTALLER_SIGN_IDENTITY:-}" ]]; then
   PKG_ARGS+=(--sign "$INSTALLER_SIGN_IDENTITY")
 fi
-pkgbuild "${PKG_ARGS[@]}" "$OUTPUT"
+COPYFILE_DISABLE=1 pkgbuild "${PKG_ARGS[@]}" "$OUTPUT"
 
 SOURCE_ARCHIVE="$ROOT_DIR/dist/M5-StopWatch-Mic-BlackHole-source-ffcb744.tar.gz"
 git -C "${BLACKHOLE_SOURCE_DIR:-${TMPDIR:-/private/tmp}/m5-stopwatch-blackhole-source}" \
