@@ -1,10 +1,8 @@
-# 功能说明书
+# 功能说明
 
-## 0. 项目来源
+## 0. 产品概览
 
-本项目基于 M5Stack StopWatch 原演示固件 / UserDemo 继续开发。原演示固件提供了 StopWatch 硬件初始化、圆形 AMOLED 显示、按键、IMU、BLE、音频、LVGL 应用组织和示例应用基础。
-
-本项目新增的是 Codex vibe-coding 模块：
+M5 StopWatch Codex 是面向桌面 AI 编程工作流的状态屏和语音输入控制器，主要功能包括：
 
 - Codex 额度圆屏页面。
 - Codex/Pet 状态动画。
@@ -15,8 +13,6 @@
 - Typeless / 微信输入法模式切换。
 - 空闲省电和降温策略。
 
-因此，这个仓库不是从零实现一套 M5Stack StopWatch BSP，而是在原 demo 固件基础上做桌面 AI 编程 companion 扩展。
-
 ## 1. 系统组成
 
 本项目分成两层：
@@ -24,7 +20,7 @@
 - 固件层：运行在 M5Stack StopWatch，负责圆屏 UI、宠物动画、电量状态、BLE HID、BLE GATT 配置接收、按键和 IMU 交互。
 - macOS Bridge：运行在 Mac 菜单栏，负责连接设备、读取本机 Codex 额度、检测 Typeless 状态、保存用户按键绑定，并把配置同步到固件。
 
-设计边界是：账号、Cookie、token、桌面焦点都只属于 Mac；设备只接收已脱敏的状态和 HID 配置。
+账号、Cookie、token 和桌面焦点只在 Mac 上处理；设备只接收额度摘要和 HID 配置。
 
 ## 2. Codex 页面布局
 
@@ -58,7 +54,7 @@
 5. Bridge 把周剩余额度、今日累计消耗、重置时间和状态转换成设备面板 payload。
 6. 固件通过 BLE GATT 接收 payload、缓存安全摘要并更新 Codex 页面。
 
-固件里仍保留 Wi-Fi panel fallback，但公开版默认关闭：
+固件支持 Wi-Fi panel fallback，默认关闭：
 
 ```text
 kDefaultWifiEnabled = false
@@ -78,7 +74,7 @@ Claude Code 额度建议只在 macOS 端实现，不放进固件。
 - 在 Mac 端归一化成“剩余额度、窗口重置时间、数据来源、错误状态”。
 - 只把摘要推送给 StopWatch，不把 Claude 登录凭据、Cookie、API key、原始日志写入设备。
 
-本项目内的参考文档见 [QUOTA.md](QUOTA.md)。其中 Claude Code 部分只规定集成边界；具体抓取逻辑应参考 `ai-limit` 或同类 macOS 本机监控工具。
+本项目内的参考文档见 [QUOTA.md](QUOTA.md)。Claude Code 的数据采集可参考 `ai-limit` 或同类 macOS 本机监控工具。
 
 ## 5. Pet 建立机制
 

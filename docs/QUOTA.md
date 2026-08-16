@@ -59,7 +59,7 @@ firmware-stopwatch-idf/main/hal/ble_bridge.cpp
 firmware-stopwatch-idf/main/apps/app_codex/codex_quota_client.cpp
 ```
 
-如果 Bridge 不运行，设备仍可显示上一次状态或本地错误状态。公开版默认不启用 Wi-Fi fallback。
+如果 Bridge 不运行，设备仍可显示上一次状态或本地错误状态。Wi-Fi fallback 默认关闭。
 
 ## Claude Code 额度
 
@@ -69,7 +69,7 @@ Claude Code 额度建议按 macOS 本机工具方式实现，参考：
 https://github.com/zhuchenxi113/ai-limit
 ```
 
-参考重点不是 UI 复刻，而是数据边界：
+参考重点不是 UI 复刻，而是数据处理方式：
 
 - 在 Mac 侧读取本机 Claude Code 或浏览器已有登录/使用状态。
 - 优先使用只读、本机、用户已授权的数据来源。
@@ -101,7 +101,7 @@ https://github.com/zhuchenxi113/ai-limit
 firmware-stopwatch-idf/main/apps/app_codex/codex_config.h
 ```
 
-公开版默认值：
+默认值：
 
 ```text
 kDefaultWifiEnabled = false

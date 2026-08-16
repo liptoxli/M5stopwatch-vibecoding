@@ -54,7 +54,7 @@
 
 ## Wi-Fi 策略
 
-公开版默认：
+默认配置：
 
 ```text
 kDefaultWifiEnabled = false
@@ -65,7 +65,7 @@ kDefaultWifiQuotaFallbackEnabled = false
 
 - Codex 额度优先由 macOS Bridge 通过 BLE 推送。
 - Wi-Fi 扫描、连接和 HTTP fallback 会增加功耗和发热。
-- 开源用户通常没有项目私有 panel 服务，默认开启 Wi-Fi fallback 反而会造成无意义重试。
+- 未配置 panel 服务时，开启 Wi-Fi fallback 会造成无意义重试。
 
 需要远端 panel 的用户可以在设置页打开 Wi-Fi，并在 `codex_config.h` 填入自己的 SSID、密码和 panel URL。
 

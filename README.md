@@ -3,15 +3,13 @@
 ![Version](https://img.shields.io/badge/version-v0.7.0-6f5cff)
 ![Platform](https://img.shields.io/badge/platform-ESP32--S3%20%7C%20macOS-2f81f7)
 
-M5Stack StopWatch 的 Codex vibe-coding 模块、扩展固件和 macOS 桥接应用。
+把 M5Stack StopWatch 变成 Codex、ChatGPT、Claude Code 和 IDE 的桌面状态屏与语音输入控制器。配套 macOS 菜单栏 App 可以把手表麦克风实时接入 Mac，并提供系统可用的 `M5 StopWatch Mic` 输入设备。
 
-当前公开版本是 **v0.7.0**（2026-08-16），配套 macOS Bridge 版本为 **v1.1.0**。固件的 About 页面和启动界面显示同一固件版本号；每次公开迭代都必须同步更新版本文件、README 和变更记录。固件历史见 [CHANGELOG.md](CHANGELOG.md)，Bridge 历史见 [tools/typeless_bridge/CHANGELOG.md](tools/typeless_bridge/CHANGELOG.md)，发布流程见 [docs/RELEASING.md](docs/RELEASING.md)。
+当前固件版本是 **v0.7.0**（2026-08-16），配套 macOS Bridge 版本为 **v1.1.0**。查看[固件更新记录](CHANGELOG.md)、[Bridge 更新记录](tools/typeless_bridge/CHANGELOG.md)和[最新下载](https://github.com/liptoxli/M5stopwatch-vibecoding/releases/latest)。
 
 ![Codex StopWatch 实机运行效果](docs/assets/codex-stopwatch-ui-actual.jpeg)
 
-本项目是在 M5Stack StopWatch 原演示固件 / UserDemo 的基础上继续开发出来的 Codex vibe-coding 模块。它不是替代原厂基础工程，而是在原有 StopWatch 圆屏、按键、IMU、BLE、音频、LVGL 应用框架之上，新增 Codex 状态页、Pet 形象、额度展示、macOS 输入桥接和省电策略。
-
-这个扩展把 M5Stack StopWatch 做成一个小型桌面状态设备：圆屏显示 Codex 额度、宠物状态、蓝牙和电量；实体按键可以绑定到 macOS 输入工具；macOS 桥接应用负责读取本机状态、同步按键配置，并把安全裁剪后的额度数据发到设备。
+圆形 AMOLED 屏可以显示 Codex 周额度、宠物状态、蓝牙连接和电量；实体 A/B 键可以控制语音输入与发送；macOS Bridge 负责蓝牙连接、按键配置、额度同步和虚拟麦克风。
 
 ## 为什么适合 vibe coding
 
@@ -26,14 +24,6 @@ M5Stack StopWatch 的形态很适合作为 vibe-coding 语音输入遥控器：
 - Shake 清除输入适合语音识别出错后的快速重来，减少从思考状态切回鼠标键盘操作的次数。
 
 这个项目的目标不是替代语音输入法，而是给 Codex / ChatGPT / Claude Code / IDE 这类 vibe-coding 工作流加一个专用的“物理语音控制层”：让开始说、停止说、确认发送、清空重说这些动作从桌面操作里独立出来。
-
-## 基础来源
-
-- 基础固件：M5Stack StopWatch 原演示固件 / UserDemo。
-- 扩展模块：本仓库新增的 Codex vibe-coding 页面、Pet 动画、BLE Bridge 配置协议、macOS Bridge、Typeless/微信输入法按键绑定、省电和状态栏逻辑。
-- 保留能力：原固件中的圆屏显示、按键、IMU、BLE、音频、LVGL 应用组织和部分示例应用。
-
-如果你已经熟悉原 M5Stack StopWatch demo，可以把本项目理解为“在原 demo 固件里新增一个 Codex 桌面 companion 应用，并配套一个 macOS 菜单栏桥接端”。
 
 ## 目录
 
@@ -64,16 +54,16 @@ docs/                     功能说明、额度机制、宠物替换指南
 | 日期 | 固件 | Mac Bridge | 主要更新 |
 | --- | --- | --- | --- |
 | 2026-08-16 | v0.7.0 | v1.1.0 | 实时 BLE 麦克风、`M5 StopWatch Mic` 驱动、周额度圆屏与完整产品安装包 |
-| 2026-08-15 | v0.6.0 | v1.0.3 | 周额度/08:00 日基线、输入配置、稳定签名与公开独立构建 |
-| 2026-06-13 | v0.5.0（界面 V0.5） | v1.0.0-v1.0.2 | 首次公开 Codex 页面、Pet、BLE Bridge、Typeless/微信输入模式和 BLE HID |
+| 2026-08-15 | v0.6.0 | v1.0.3 | 周额度/08:00 日基线、输入配置和 Bridge 稳定性改进 |
+| 2026-06-13 | v0.5.0（界面 V0.5） | v1.0.0-v1.0.2 | Codex 页面、Pet、BLE Bridge、Typeless/微信输入模式和 BLE HID |
 
-每个具体版本的逐项变更分别记录在固件 [CHANGELOG](CHANGELOG.md) 和 Mac Bridge [CHANGELOG](tools/typeless_bridge/CHANGELOG.md)，已经公开的版本号不会重复使用或移动标签。
+每个版本的逐项变更分别记录在固件 [CHANGELOG](CHANGELOG.md) 和 Mac Bridge [CHANGELOG](tools/typeless_bridge/CHANGELOG.md)。
 
 ## 构建固件
 
 需要 ESP-IDF v5.5.x 和 M5Stack StopWatch 目标硬件。
 
-仓库根目录的 `VERSION` 和 `firmware-stopwatch-idf/version.txt` 是当前公开版本标识，构建前可运行 `tools/check_version.sh` 检查版本是否一致。
+仓库根目录的 `VERSION` 和 `firmware-stopwatch-idf/version.txt` 是当前版本标识，构建前可运行 `tools/check_version.sh` 检查版本是否一致。
 
 ```bash
 cd firmware-stopwatch-idf
@@ -84,7 +74,7 @@ idf.py flash
 
 首次安装、从 v0.6.0 或更早版本升级，或 `partitions.csv`/Bootloader 发生变化时，必须使用完整 `idf.py flash`。仅在设备已经使用当前分区布局、只是更新同一兼容版本的应用时，才使用 `idf.py app-flash`；否则旧分区表可能从错误地址启动并表现为黑屏。
 
-公开版默认不包含私人 Wi-Fi 和私人 relay。远端 panel URL 在：
+Wi-Fi 和远端 panel 默认关闭。如需启用，可在这里填写自己的 panel URL 和 Wi-Fi 信息：
 
 ```text
 firmware-stopwatch-idf/main/apps/app_codex/codex_config.h
@@ -107,9 +97,9 @@ Privacy & Security -> Accessibility
 
 LaunchAgent 默认 `RunAtLoad=true`、`KeepAlive=false`：开机自动启动，但用户退出后不会被强制拉起。
 
-虚拟麦克风模式默认关闭。开启后连续实时传输，不生成 WAV 文件；关闭后恢复原 macOS 默认输入。协议、带宽和包结构见 [docs/stopwatch-ble-microphone.md](docs/stopwatch-ble-microphone.md)。自定义 Core Audio 驱动是独立 GPLv3 组件，许可边界见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+虚拟麦克风模式默认关闭。开启后连续实时传输，不生成 WAV 文件；关闭后恢复原 macOS 默认输入。协议、带宽和包结构见 [docs/stopwatch-ble-microphone.md](docs/stopwatch-ble-microphone.md)。Core Audio 驱动的许可证说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-产品安装包会安装菜单栏 App、登录 LaunchAgent 和 `M5 StopWatch Mic` 驱动。旧的开发测试设备 `BlackHole 2ch` 不再是产品运行依赖，可在确认新虚拟麦克风正常后单独卸载。
+产品安装包会安装菜单栏 App、登录 LaunchAgent 和 `M5 StopWatch Mic` 驱动。如果 Mac 中仍有 `BlackHole 2ch`，确认新麦克风正常后可以单独卸载。
 
 ## 额度机制
 
@@ -119,12 +109,15 @@ Bridge 以本地时间每天 08:00 为日统计边界，累计本周期内周额
 
 Claude Code 额度不在固件里直接实现。建议参考 `ai-limit` 这类 macOS 开源额度监控工具的做法：在 Mac 侧读取本机登录/使用状态，生成安全摘要，再通过 Bridge 或本地服务推送给设备。详细说明见 [docs/QUOTA.md](docs/QUOTA.md)。
 
-## 隐私边界
+## 隐私与安全
 
 - 固件不保存 OpenAI、Claude、Typeless、微信输入法或任何云服务 token。
 - 固件不读取浏览器 Cookie、Keychain 或 `~/.codex`。
 - macOS Bridge 只在本机读取本机登录状态，并只向设备发送额度百分比、剩余时间和状态字段。
-- 公开版已移除私人 Wi-Fi、私人域名、内部 server、历史 handoff 和构建产物。
+
+## 致谢
+
+固件基于 M5Stack StopWatch UserDemo，第三方组件保留各自许可证。
 
 ## License
 
