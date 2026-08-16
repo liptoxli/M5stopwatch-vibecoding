@@ -2,6 +2,17 @@
 
 Mac Bridge 使用独立语义化版本。固件与 Bridge 的兼容版本关系见仓库根目录 [README](../../README.md#版本历史)。
 
+## [1.1.1] - 2026-08-16
+
+### Fixed
+
+- 修复 StopWatch 仍作为 BLE 键盘连接时，Bridge 的音频 GATT 断线后无法自动恢复的问题。
+- 启动、连接失败、断线和健康检查现在都会优先接管 macOS 已连接的 `M5Codex-*` 设备，再回退到 BLE 扫描。
+
+### Verified
+
+- 在 `M5Codex-RO` 保持 HID 连接、Bridge 音频连接已经断开的现场状态下，重新建立 GATT 服务并恢复 16 kHz 音频包接收。
+
 ## [1.1.0] - 2026-08-16
 
 ### Added
@@ -46,6 +57,7 @@ Mac Bridge 使用独立语义化版本。固件与 Bridge 的兼容版本关系�
 - 支持 `M5Codex-*` 连接、Codex 额度推送、输入模式和按键配置同步。
 - 支持 Typeless 状态观察、LaunchAgent 安装和 arm64 ZIP 发布包。
 
+[1.1.1]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.1.1
 [1.1.0]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.1.0
 [1.0.3]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.0.3
 [1.0.2]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.0.2

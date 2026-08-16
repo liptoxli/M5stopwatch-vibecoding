@@ -1745,6 +1745,8 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private var pollTimer: Timer?
     private var quotaTimer: Timer?
     private var healthTimer: Timer?
+    private var scanRecoveryActive = false
+    private var nameScanFallbackWorkItem: DispatchWorkItem?
     private var panelSequence = 1
     private var quotaFetchInFlight = false
     private var panelRefreshQueued = false
@@ -1812,26 +1814,12 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         switch central.state {
         case .poweredOn:
             startHealthLoop()
-            let connected = central.retrieveConnectedPeripherals(withServices: [serviceUUID]) +
-                central.retrieveConnectedPeripherals(withServices: [hidServiceUUID])
-            if let peripheral = connected.first(where: { isSupportedDeviceName($0.name) }) {
-                self.peripheral = peripheral
-                peripheral.delegate = self
-                BridgeStatusCenter.shared.bleStatus = "Opening \(peripheral.name ?? deviceNamePrefix)"
-                log("Found connected \(peripheral.name ?? deviceNamePrefix). Opening bridge service...")
-                central.connect(peripheral)
-                return
-            }
-
-            BridgeStatusCenter.shared.bleStatus = "Scanning"
-            log("BLE powered on. Scanning for \(deviceNamePrefix)* HID service...")
-            scanForDevice(hidServiceOnly: true)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in
-                guard let self, self.peripheral == nil else { return }
-                log("Service scan did not find device yet. Falling back to name scan...")
-                self.scanForDevice(hidServiceOnly: false)
-            }
+            scanRecoveryActive = false
+            recoverConnection(reason: "Bluetooth ready")
         default:
+            nameScanFallbackWorkItem?.cancel()
+            nameScanFallbackWorkItem = nil
+            scanRecoveryActive = false
             BridgeStatusCenter.shared.bleStatus = "BLE unavailable"
             log("BLE unavailable: \(central.state.rawValue)")
         }
@@ -1846,6 +1834,9 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
 
         self.peripheral = peripheral
         peripheral.delegate = self
+        nameScanFallbackWorkItem?.cancel()
+        nameScanFallbackWorkItem = nil
+        scanRecoveryActive = false
         central.stopScan()
         BridgeStatusCenter.shared.bleStatus = "Connecting"
         log("Found \(peripheral.name ?? advName ?? deviceNamePrefix), RSSI \(RSSI). Connecting bridge...")
@@ -1853,6 +1844,9 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        nameScanFallbackWorkItem?.cancel()
+        nameScanFallbackWorkItem = nil
+        scanRecoveryActive = false
         resetBridgeCharacteristics()
         BridgeStatusCenter.shared.bleStatus = "Connected"
         log("Connected. Discovering bridge and microphone services...")
@@ -1863,10 +1857,15 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         BridgeStatusCenter.shared.bleStatus = "Connect failed"
         BridgeStatusCenter.shared.lastError = error?.localizedDescription ?? "unknown"
         log("Connect failed: \(error?.localizedDescription ?? "unknown")")
+        resetBridgeCharacteristics()
+        self.peripheral = nil
         if options.once {
             exit(1)
         }
-        scanForDevice(hidServiceOnly: true)
+        scanRecoveryActive = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            self?.recoverConnection(reason: "connect failed")
+        }
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
@@ -1883,7 +1882,8 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         if options.once {
             exit(0)
         }
-        scanForDevice(hidServiceOnly: true)
+        scanRecoveryActive = false
+        recoverConnection(reason: "disconnect")
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
@@ -2061,6 +2061,41 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
                                    options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
     }
 
+    private func recoverConnection(reason: String) {
+        guard central.state == .poweredOn, peripheral == nil else { return }
+
+        let connected = central.retrieveConnectedPeripherals(withServices: [serviceUUID]) +
+            central.retrieveConnectedPeripherals(withServices: [hidServiceUUID])
+        if let candidate = connected.first(where: { isSupportedDeviceName($0.name) }) {
+            nameScanFallbackWorkItem?.cancel()
+            nameScanFallbackWorkItem = nil
+            scanRecoveryActive = false
+            central.stopScan()
+            peripheral = candidate
+            candidate.delegate = self
+            BridgeStatusCenter.shared.bleStatus = "Reconnecting"
+            log("Found connected \(candidate.name ?? deviceNamePrefix). Recovering bridge connection (\(reason))...")
+            central.connect(candidate)
+            return
+        }
+
+        guard !scanRecoveryActive else { return }
+        scanRecoveryActive = true
+        BridgeStatusCenter.shared.bleStatus = "Scanning"
+        log("Scanning for \(deviceNamePrefix)* HID service (\(reason))...")
+        scanForDevice(hidServiceOnly: true)
+
+        let fallback = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.peripheral == nil,
+                  self.central.state == .poweredOn else { return }
+            log("HID scan did not find device. Falling back to name scan (\(reason))...")
+            self.scanForDevice(hidServiceOnly: false)
+        }
+        nameScanFallbackWorkItem = fallback
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0, execute: fallback)
+    }
+
     private func resetBridgeCharacteristics() {
         eventCharacteristic = nil
         statusCharacteristic = nil
@@ -2141,9 +2176,10 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         guard !options.once, central.state == .poweredOn else { return }
         BridgeStatusCenter.shared.selfCheckStatus = runBridgeSelfCheck().summary
         guard let peripheral else {
-            scanForDevice(hidServiceOnly: true)
+            recoverConnection(reason: "health check")
             return
         }
+        guard peripheral.state == .connected else { return }
 
         let missingBridge = eventCharacteristic == nil ||
             statusCharacteristic == nil ||

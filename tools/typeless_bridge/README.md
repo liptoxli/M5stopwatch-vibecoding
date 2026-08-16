@@ -2,7 +2,7 @@
 
 StopWatch BLE Bridge is the macOS companion app for the M5 StopWatch Codex firmware.
 
-Current version: **v1.1.0**. Full version history: [CHANGELOG.md](CHANGELOG.md).
+Current version: **v1.1.1**. Full version history: [CHANGELOG.md](CHANGELOG.md).
 
 It provides local functions including:
 
@@ -54,7 +54,7 @@ Virtual microphone mode is off by default. When enabled, the Bridge:
 
 Each BLE packet carries 320 decoded samples (20 ms): 14 bytes of protocol header plus 160 bytes of ADPCM. The steady wire rate is about 8.7 KB/s, while decoded PCM is 32 KB/s. No WAV container or recording file is used.
 
-The product installer adds the Core Audio HAL driver. Driver installation requires macOS administrator authorization and restarts Core Audio. During development only, the Bridge can fall back to an existing `BlackHole 2ch` device.
+The product installer adds the Core Audio HAL driver. Driver installation requires macOS administrator authorization and restarts Core Audio.
 
 The product installer includes `M5 StopWatch Mic`, so `BlackHole 2ch` is not required in normal use. After verifying the new device, an old Homebrew test installation can be removed with `brew uninstall --cask blackhole-2ch`.
 
@@ -106,7 +106,7 @@ When Typeless is installed and Accessibility permission is granted, the bridge c
 
 For other input apps, leave Typeless shortcut sync disabled and configure shortcuts inside that app manually.
 
-### Input boundary
+### Input behavior
 
 The left key toggles voice input and the right key confirms/sends through firmware BLE HID. Holding the right key for two seconds sends the configured long-press action; the default is `Command+Return` for Codex guide/follow-up insertion. The bridge app observes device events only to update status on the StopWatch screen. It does not restore focus, queue Enter, or simulate keyboard events on macOS.
 
@@ -171,7 +171,7 @@ the remaining percentage jumps upward, the jump is not counted as negative
 usage; `reset_count` increments and `segment_start_left_pct` starts a new
 visual segment. `day_start_left_pct` remains the original daily marker.
 
-For open-source users, document this as:
+To use quota sync:
 
 1. Install Codex locally.
 2. Log in through the official Codex/OpenAI flow.
@@ -188,14 +188,14 @@ tools/typeless_bridge/build_stopwatch_ble_bridge.sh
 ## Package Release
 
 ```bash
-tools/typeless_bridge/package_release.sh 1.1.0
+tools/typeless_bridge/package_release.sh 1.1.1
 ```
 
 This creates:
 
 ```text
-dist/StopWatch-BLE-Bridge-1.1.0-macOS-arm64.zip
-dist/StopWatch-BLE-Bridge-1.1.0-macOS-arm64.zip.sha256
+dist/StopWatch-BLE-Bridge-1.1.1-macOS-arm64.zip
+dist/StopWatch-BLE-Bridge-1.1.1-macOS-arm64.zip.sha256
 ```
 
 The release package contains only the app bundle. It does not install the LaunchAgent or start the app automatically.
@@ -204,11 +204,11 @@ To build the product installer that installs the app, login LaunchAgent, and
 `M5 StopWatch Mic` Core Audio driver together:
 
 ```bash
-tools/typeless_bridge/package_product_installer.sh 1.1.0
+tools/typeless_bridge/package_product_installer.sh 1.1.1
 ```
 
 The `.pkg` requires administrator authorization because it writes the audio
-driver under `/Library/Audio/Plug-Ins/HAL`. Public distribution additionally
+driver under `/Library/Audio/Plug-Ins/HAL`. Distribution outside your own Mac
 requires a Developer ID Installer signature and notarization. The build also
 emits the pinned BlackHole corresponding-source archive required by GPLv3.
 
