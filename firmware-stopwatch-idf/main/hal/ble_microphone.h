@@ -14,5 +14,7 @@ void on_gap_event(const ble_gap_event& event);
 bool is_streaming();
 void begin_voice_input();
 void end_voice_input();
+bool voice_session_interrupted();
+void clear_voice_session_interruption();
 
 }  // namespace ble_microphone

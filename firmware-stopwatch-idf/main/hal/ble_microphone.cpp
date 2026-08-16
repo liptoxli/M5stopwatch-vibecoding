@@ -49,6 +49,7 @@ std::atomic<bool> g_audio_subscribed = false;
 std::atomic<bool> g_stats_subscribed = false;
 std::atomic<StreamMode> g_stream_mode = StreamMode::Disabled;
 std::atomic<bool> g_voice_requested = false;
+std::atomic<bool> g_voice_session_interrupted = false;
 std::atomic<TickType_t> g_stop_at_tick = 0;
 std::atomic<std::uint32_t> g_stream_generation = 0;
 std::atomic<bool> g_capture_task_started = false;
@@ -80,6 +81,7 @@ void request_voice_start()
         return;
     }
     g_stop_at_tick = 0;
+    g_voice_session_interrupted = false;
     if (!g_voice_requested.exchange(true)) {
         ++g_stream_generation;
     }
@@ -389,6 +391,9 @@ void on_connected(std::uint16_t connection_handle)
 
 void on_disconnected()
 {
+    if (g_voice_requested.load() && g_stop_at_tick.load() == 0) {
+        g_voice_session_interrupted = true;
+    }
     g_connected = false;
     g_audio_subscribed = false;
     g_stats_subscribed = false;
@@ -438,6 +443,16 @@ void begin_voice_input()
 void end_voice_input()
 {
     request_voice_stop(false);
+}
+
+bool voice_session_interrupted()
+{
+    return g_voice_session_interrupted.load();
+}
+
+void clear_voice_session_interruption()
+{
+    g_voice_session_interrupted = false;
 }
 
 }  // namespace ble_microphone

@@ -390,7 +390,9 @@ void CodexView::update()
     updateMotionInput();
 
     if (_theme_mode != ThemeMode::OpenWatcherV2) {
-        const bool pet_active = _voice_mode != VoiceMode::Idle ||
+        const bool voice_animated = _voice_mode == VoiceMode::Recording ||
+                                    _voice_mode == VoiceMode::Processing;
+        const bool pet_active = voice_animated ||
                                 _state.processing ||
                                 _pet_pressed ||
                                 _pet_anim != PetAnim::Idle ||
@@ -539,18 +541,39 @@ void CodexView::setVoiceMode(VoiceMode mode)
     }
 
     _voice_mode = mode;
-    const bool visible = mode != VoiceMode::Idle;
+    const bool visible = mode == VoiceMode::Recording || mode == VoiceMode::Processing;
     if (_voice_waveform) {
         _voice_waveform->setHidden(!visible);
     }
-    if (_message_label) {
-        _message_label->setHidden(visible || _message_image_active);
-    }
-    if (_message_image) {
-        _message_image->setHidden(visible || !_message_image_active);
+    if (mode == VoiceMode::Interrupted) {
+        _message_image_active = false;
+        _state.message = "MIC LOST - PRESS A";
+        _state.messageExpiresAtMs = 0;
+        if (_message_label) {
+            _message_label->setText(_state.message.c_str());
+            _message_label->setTextColor(lv_color_hex(kOwAmber));
+            _message_label->setHidden(_theme_mode == ThemeMode::OpenWatcherV2);
+        }
+        if (_message_image) {
+            _message_image->setHidden(true);
+        }
+    } else {
+        if (_message_label) {
+            if (_state.message == "MIC LOST - PRESS A") {
+                _state.message.clear();
+                _message_label->setText("");
+            }
+            _message_label->setTextColor(lv_color_hex(_theme_mode == ThemeMode::OpenWatcherV2
+                                                          ? kOwSoftText
+                                                          : kColorText));
+            _message_label->setHidden(visible || _message_image_active);
+        }
+        if (_message_image) {
+            _message_image->setHidden(visible || !_message_image_active);
+        }
     }
     if (_v2_sync_indicator) {
-        setHiddenIfChanged(*_v2_sync_indicator, visible);
+        setHiddenIfChanged(*_v2_sync_indicator, visible || mode == VoiceMode::Interrupted);
     }
     updateOpenWatcherV2Labels();
 }
@@ -560,7 +583,9 @@ uint32_t CodexView::frameIntervalMs() const
     if (_theme_mode == ThemeMode::OpenWatcherV2) {
         return 100;
     }
-    return _voice_mode == VoiceMode::Idle ? kPetIdleFrameMs : kPetActiveFrameMs;
+    return (_voice_mode == VoiceMode::Recording || _voice_mode == VoiceMode::Processing)
+        ? kPetActiveFrameMs
+        : kPetIdleFrameMs;
 }
 
 bool CodexView::consumeClearInputRequest()
@@ -870,7 +895,7 @@ void CodexView::initOpenWatcherV2()
     _v2_status_label->setText("");
     _v2_status_label->setTextFont(&lv_font_montserrat_22);
     _v2_status_label->setTextColor(lv_color_hex(kOwBlue));
-    _v2_status_label->setWidth(180);
+    _v2_status_label->setWidth(280);
     _v2_status_label->setTextAlign(LV_TEXT_ALIGN_CENTER);
     _v2_status_label->align(LV_ALIGN_TOP_MID, 0, 199);
     _v2_status_label->setHidden(true);
@@ -943,11 +968,16 @@ void CodexView::updateOpenWatcherV2Labels()
         setLabelTextIfChanged(*_v2_today_value_label, today);
     }
     if (_v2_status_label) {
+        const bool interrupted = _voice_mode == VoiceMode::Interrupted;
         const bool recording = _voice_mode == VoiceMode::Recording;
         const bool processing = _voice_mode == VoiceMode::Processing || _state.processing;
-        const bool show_status = _state.compactWarning || recording || processing;
-        const char* text = _state.compactWarning ? "COMPACT SOON" : (recording ? "LISTENING" : "PROCESSING");
-        const uint32_t color = _state.compactWarning ? kOwAmber : (recording ? kOwGreen : (processing ? kOwAmber : kOwBlue));
+        const bool show_status = interrupted || _state.compactWarning || recording || processing;
+        const char* text = interrupted ? "MIC LOST - PRESS A"
+                                       : (_state.compactWarning ? "COMPACT SOON"
+                                                                : (recording ? "LISTENING" : "PROCESSING"));
+        const uint32_t color = interrupted ? kOwToday
+                                           : (_state.compactWarning ? kOwAmber
+                                                                    : (recording ? kOwGreen : (processing ? kOwAmber : kOwBlue)));
         const char* current = _v2_status_label->getText();
         if (current == nullptr || std::string_view(current) != text) {
             _v2_status_label->setText(text);
@@ -1327,6 +1357,8 @@ void CodexView::updatePet()
                 _pet_face->setText("> ");
             } else if (_pet_anim == PetAnim::Stretch) {
                 _pet_face->setText("^_");
+            } else if (_voice_mode == VoiceMode::Interrupted) {
+                _pet_face->setText("!!");
             } else if (_voice_mode != VoiceMode::Idle) {
                 _pet_face->setText(">_");
             } else {
@@ -1367,7 +1399,8 @@ void CodexView::initVoiceWaveform()
 
 void CodexView::updateVoiceWaveform()
 {
-    if (_voice_mode == VoiceMode::Idle || !_voice_waveform || lv_obj_has_flag(_voice_waveform->get(), LV_OBJ_FLAG_HIDDEN)) {
+    if ((_voice_mode != VoiceMode::Recording && _voice_mode != VoiceMode::Processing) ||
+        !_voice_waveform || lv_obj_has_flag(_voice_waveform->get(), LV_OBJ_FLAG_HIDDEN)) {
         return;
     }
 

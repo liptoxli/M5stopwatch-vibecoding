@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-08-16
+
+### Changed
+
+- 录音期间 BLE 断开或音频连续中断时，本次听写会明确标记为失败，不再自动续接可能缺失中段的语音。
+- StopWatch 显示 `MIC LOST - PRESS A` 并以两次短振动提醒；BLE 重连后只恢复待机，按一次 A 即可开始全新录音。
+- 空闲时的 BLE 重连继续静默进行，不显示录音异常，也不会额外启动音频采集。
+- 配套 macOS Bridge 更新到 v1.1.6：断线时保持虚拟输入和系统默认输入不变，结束当前 Typeless 听写并保留已经识别的文字。
+- Bridge 增加录音流停顿和连续丢帧检测；异常状态会保留在菜单栏和设备界面，直到用户主动重试。
+
+### Fixed
+
+- 修复录音中途 BLE 重连后设备停在待机、Typeless 却继续录制静音，最终只得到部分文字的问题。
+
 ## [0.7.3] - 2026-08-16
 
 ### Changed
@@ -97,7 +111,8 @@
 - 新增 Typeless/微信输入法输入模式、A/B 键绑定、摇晃清除和 BLE HID 输入。
 - 新增 Codex 额度 BLE 推送、隐私与安全说明、功能说明和 Pet 替换文档。
 
-[Unreleased]: https://github.com/liptoxli/M5stopwatch-vibecoding/compare/v0.7.3...HEAD
+[Unreleased]: https://github.com/liptoxli/M5stopwatch-vibecoding/compare/v0.7.4...HEAD
+[0.7.4]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v0.7.4
 [0.7.3]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v0.7.3
 [0.7.2]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v0.7.2
 [0.7.1]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v0.7.1

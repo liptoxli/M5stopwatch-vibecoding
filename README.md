@@ -1,11 +1,11 @@
 # M5stopwatch-vibecoding
 
-![Version](https://img.shields.io/badge/version-v0.7.3-6f5cff)
+![Version](https://img.shields.io/badge/version-v0.7.4-6f5cff)
 ![Platform](https://img.shields.io/badge/platform-ESP32--S3%20%7C%20macOS-2f81f7)
 
 把 M5Stack StopWatch 变成 Codex、ChatGPT、Claude Code 和 IDE 的桌面状态屏与语音输入控制器。配套 macOS 菜单栏 App 可以把手表麦克风实时接入 Mac，并提供系统可用的 `M5 StopWatch Mic` 输入设备。
 
-当前固件版本是 **v0.7.3**（2026-08-16），配套 macOS Bridge 版本为 **v1.1.5**。查看[固件更新记录](CHANGELOG.md)、[Bridge 更新记录](tools/typeless_bridge/CHANGELOG.md)和[最新下载](https://github.com/liptoxli/M5stopwatch-vibecoding/releases/latest)。
+当前固件版本是 **v0.7.4**（2026-08-16），配套 macOS Bridge 版本为 **v1.1.6**。查看[固件更新记录](CHANGELOG.md)、[Bridge 更新记录](tools/typeless_bridge/CHANGELOG.md)和[最新下载](https://github.com/liptoxli/M5stopwatch-vibecoding/releases/latest)。
 
 ![Codex StopWatch 实机运行效果](docs/assets/codex-stopwatch-ui-actual.jpeg)
 
@@ -53,6 +53,7 @@ docs/                     功能说明、额度机制、宠物替换指南
 
 | 日期 | 固件 | Mac Bridge | 主要更新 |
 | --- | --- | --- | --- |
+| 2026-08-16 | v0.7.4 | v1.1.6 | 录音断线明确报错并结束本次听写；重连后按一次 A 重新录制，不静默续接残缺语音 |
 | 2026-08-16 | v0.7.3 | v1.1.5 | BLE 保持连接，麦克风改为按需传输；设备 A 键和 Mac Typeless 快捷键都可立即唤醒 |
 | 2026-08-16 | v0.7.2 | v1.1.4 | 第二套 UI 差分刷新和 10 FPS 波形；语音状态不再触发完整额度面板刷新 |
 | 2026-08-16 | v0.7.1 | v1.1.3 | 修复第二套 UI 录音时的 A/B 按键响应和 Typeless 再次录音 |
@@ -100,7 +101,7 @@ Privacy & Security -> Accessibility
 
 LaunchAgent 默认 `RunAtLoad=true`、`KeepAlive=false`：开机自动启动，但用户退出后不会被强制拉起。
 
-虚拟麦克风模式默认关闭。开启后连续实时传输，不生成 WAV 文件；关闭后恢复原 macOS 默认输入。协议、带宽和包结构见 [docs/stopwatch-ble-microphone.md](docs/stopwatch-ble-microphone.md)。Core Audio 驱动的许可证说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+虚拟麦克风模式默认关闭。开启后虚拟输入保持可用，只有开始听写时才实时传输音频，不生成 WAV 文件；关闭后恢复原 macOS 默认输入。录音期间如果 BLE 或音频流中断，本次听写会明确报错并保留已有文字，重连后按 A 重新录制。协议、带宽和包结构见 [docs/stopwatch-ble-microphone.md](docs/stopwatch-ble-microphone.md)。Core Audio 驱动的许可证说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 产品安装包会安装菜单栏 App、登录 LaunchAgent 和 `M5 StopWatch Mic` 驱动。如果 Mac 中仍有 `BlackHole 2ch`，确认新麦克风正常后可以单独卸载。
 

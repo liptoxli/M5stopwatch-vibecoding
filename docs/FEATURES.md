@@ -124,7 +124,7 @@ Bridge 菜单栏应用提供：
 
 ## 8. Typeless 和设备状态栏
 
-Typeless 模式下，Bridge 使用 Accessibility 观察 Typeless 的录音、处理中和完成状态，再把状态同步到设备。真实输入按键由设备固件通过 BLE HID 发送；Bridge 不恢复焦点、不排队发送 Enter，也不在 macOS 上模拟按键。
+Typeless 模式下，Bridge 使用 Accessibility 观察 Typeless 的录音、处理中和完成状态，再把状态同步到设备。真实输入按键通常由设备固件通过 BLE HID 发送；录音链路异常时，Bridge 只模拟一次已配置的 Typeless 快捷键来结束本次听写，已有文字由 Typeless 保留，重连后不会自动续录。
 
 设备状态栏会显示 BLE、语音、额度和错误状态。Accessibility 权限缺失时，Bridge 会进入 limited 状态，设备仍可通过 BLE HID fallback 使用基础按键。
 
@@ -148,4 +148,4 @@ Typeless 模式下，Bridge 使用 Accessibility 观察 Typeless 的录音、处
 - 3 分钟：关闭 Wi-Fi radio、停止振动、停止 LVGL 更新、屏幕背光归零，并让屏幕进入 activity sleep。
 - 15 分钟且未接外部电源：停止显示和无线活动后请求 PMIC 关机。
 
-Wi-Fi 默认关闭；音频输出保留，音频输入关闭。这样保留开机/按键音效，同时减少麦克风链路功耗。
+Wi-Fi 默认关闭；音频输出保留，麦克风输入按需启动。空闲时虚拟输入继续输出静音，但设备停止采集、编码和 BLE 音频通知，以减少麦克风链路功耗。

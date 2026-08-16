@@ -14,6 +14,7 @@ enum class VoicePhase : uint8_t {
     Idle,
     Recording,
     Processing,
+    Interrupted,
 };
 
 void set_enabled(bool enabled);
@@ -22,6 +23,8 @@ bool is_connected();
 bool disconnect_current();
 bool is_typeless_input_mode();
 void set_voice_capture_active(bool active);
+bool voice_session_interrupted();
+void clear_voice_session_interruption();
 
 void send_typeless_option(ButtonAction action);
 void send_codex_enter();

@@ -74,6 +74,7 @@ struct MicrophonePipelineHealth {
     let packetAge: TimeInterval?
     let packetCount: UInt64
     let lostPacketCount: UInt64
+    let latestPacketGapCount: UInt64
     let decodedRMS: Double
     let statsAge: TimeInterval?
     let deviceStreaming: Bool
@@ -235,6 +236,7 @@ final class StopWatchMicrophonePipeline {
     private(set) var outputDeviceName: String?
     private(set) var packetCount: UInt64 = 0
     private(set) var lostPacketCount: UInt64 = 0
+    private(set) var latestPacketGapCount: UInt64 = 0
 
     var isRunning: Bool { output?.health(now: Date()).healthy == true }
 
@@ -305,7 +307,12 @@ final class StopWatchMicrophonePipeline {
             self.expectedSampleIndex = nil
             lostPacketCount = 0
         }
-        if let expectedSequence, sequence != expectedSequence { lostPacketCount += UInt64(sequence &- expectedSequence) }
+        if let expectedSequence, sequence != expectedSequence {
+            latestPacketGapCount = UInt64(sequence &- expectedSequence)
+            lostPacketCount += latestPacketGapCount
+        } else {
+            latestPacketGapCount = 0
+        }
         expectedSequence = sequence &+ 1
         if let expectedSampleIndex, sampleIndex > expectedSampleIndex {
             let gap = sampleIndex - expectedSampleIndex
@@ -354,6 +361,7 @@ final class StopWatchMicrophonePipeline {
         expectedSampleIndex = nil
         packetCount = 0
         lostPacketCount = 0
+        latestPacketGapCount = 0
         lastPacketAt = nil
         lastDecodedRMS = 0
     }
@@ -370,6 +378,7 @@ final class StopWatchMicrophonePipeline {
             packetAge: lastPacketAt.map { now.timeIntervalSince($0) },
             packetCount: packetCount,
             lostPacketCount: lostPacketCount,
+            latestPacketGapCount: latestPacketGapCount,
             decodedRMS: lastDecodedRMS,
             statsAge: lastStatsAt.map { now.timeIntervalSince($0) },
             deviceStreaming: deviceStreaming,
@@ -381,6 +390,7 @@ final class StopWatchMicrophonePipeline {
 
     private func resetTracking() {
         expectedSequence = nil; expectedSampleIndex = nil; packetCount = 0; lostPacketCount = 0
+        latestPacketGapCount = 0
         lastPacketAt = nil; lastStatsAt = nil; lastDecodedRMS = 0
         deviceStreaming = false; deviceAudioSubscribed = false
         devicePacketsSent = 0; devicePacketsDropped = 0
