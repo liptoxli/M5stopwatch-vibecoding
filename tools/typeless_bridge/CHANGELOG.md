@@ -2,6 +2,20 @@
 
 Mac Bridge 使用独立语义化版本。固件与 Bridge 的兼容版本关系见仓库根目录 [README](../../README.md#版本历史)。
 
+## [1.1.2] - 2026-08-16
+
+### Fixed
+
+- 修复 BLE 音频包仍在持续传输、系统仍显示 `M5 StopWatch Mic`，但 Core Audio 虚拟输出引擎停转后输入变成全静音的问题。
+- 健康检查现在分别监控 BLE 音频包、ADPCM 解码和 Core Audio 渲染回调；输出停转时只重建音频引擎，不重启整个 Bridge，也不重置原默认输入记录。
+- 音频通知流停止时会自动重新订阅并重新发送 Start；设备流序号归零不再被误计为大量丢包。
+
+### Verified
+
+- 故障现场直接采样从 `Peak/RMS = -inf` 恢复到 Peak `-22.66 dB`、RMS `-39.29 dB`。
+- 故障注入测试确认输出引擎从 `healthy=true` 到主动停止后的 `healthy=false`，再通过同一重建路径恢复为 `healthy=true`。
+- 恢复后设备端和 Bridge 端丢包计数均为 0。
+
 ## [1.1.1] - 2026-08-16
 
 ### Fixed
@@ -57,6 +71,7 @@ Mac Bridge 使用独立语义化版本。固件与 Bridge 的兼容版本关系�
 - 支持 `M5Codex-*` 连接、Codex 额度推送、输入模式和按键配置同步。
 - 支持 Typeless 状态观察、LaunchAgent 安装和 arm64 ZIP 发布包。
 
+[1.1.2]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.1.2
 [1.1.1]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.1.1
 [1.1.0]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.1.0
 [1.0.3]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.0.3
