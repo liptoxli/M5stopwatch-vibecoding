@@ -4,10 +4,39 @@
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-08-16
+
 ### Changed
 
-- 优化 README、功能说明和发布说明，突出产品功能、安装步骤和使用信息。
-- 配套 macOS Bridge 更新到 v1.1.2，支持音频 GATT 断线恢复、虚拟输出引擎心跳和静音局部自恢复。
+- 虚拟麦克风开启后继续保持 BLE、HID、额度和状态连接，但空闲时停止 PCM 采集、ADPCM 编码和音频通知。
+- 设备 A 键在发送 HID/Bridge 事件前先本地启动麦克风；停止录音后保留 400ms 音频尾段再回到待机。
+- 空闲音频任务由每 10ms 轮询改为阻塞等待，仅每秒唤醒一次发送健康统计。
+- 配套 macOS Bridge 更新到 v1.1.5：支持按需音频控制，并监控原 Typeless 快捷键，在使用 Mac 键盘启动听写时也能提前唤醒 StopWatch 麦克风。
+- BLE 连接继续使用已验证的 15ms 间隔，本版本不调整连接参数、配对、HID 或自动关机逻辑。
+
+### Compatibility
+
+- Bridge 会探测固件是否支持按需音频；旧固件拒绝新控制命令时自动回退为原来的连续音频流。
+
+## [0.7.2] - 2026-08-16
+
+### Changed
+
+- 第二套 UI 保持现有布局与功能，将动态刷新降为 10 FPS；第一套 UI 仍保持原有 20/30 FPS 节奏。
+- 静态额度画布只在周额度或活动方格变化时重绘，文字只在内容变化时更新，录音波形取消阴影并跳过重复帧。
+- 同步状态装饰改为独立的小面积控件，录音状态切换不再触发整张 466×466 画布刷新。
+- 配套 macOS Bridge 更新到 v1.1.4：录音状态继续实时同步，但不再连带推送完整额度面板；额度仍按连接和定时机制更新。
+
+### Fixed
+
+- 第二套 UI 更新为当前已选布局，并统一刷新与按键响应逻辑。
+
+## [0.7.1] - 2026-08-16
+
+### Fixed
+
+- OpenWatcher V2 录音动画不再每 33 ms 重绘整张 466×466 静态画布，避免录音开始后 A/B 按键失去响应。
+- 配套 macOS Bridge 更新到 v1.1.3：Typeless 模式恢复 A 键按下切换录音，松开不再立即停止；Processing 状态下再次按 A 会直接开始新录音。
 
 ## [0.7.0] - 2026-08-16
 
@@ -68,7 +97,10 @@
 - 新增 Typeless/微信输入法输入模式、A/B 键绑定、摇晃清除和 BLE HID 输入。
 - 新增 Codex 额度 BLE 推送、隐私与安全说明、功能说明和 Pet 替换文档。
 
-[Unreleased]: https://github.com/liptoxli/M5stopwatch-vibecoding/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/liptoxli/M5stopwatch-vibecoding/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v0.7.3
+[0.7.2]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v0.7.2
+[0.7.1]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v0.7.1
 [0.7.0]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v0.7.0
 [0.6.0]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.6.0
 [0.5.0]: https://github.com/liptoxli/M5stopwatch-vibecoding/commit/ac120b2

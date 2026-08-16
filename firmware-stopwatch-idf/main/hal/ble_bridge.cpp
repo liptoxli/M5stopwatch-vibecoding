@@ -1352,6 +1352,15 @@ bool is_typeless_input_mode()
     return g_host_input_mode == HostInputMode::Typeless;
 }
 
+void set_voice_capture_active(bool active)
+{
+    if (active) {
+        ble_microphone::begin_voice_input();
+    } else {
+        ble_microphone::end_voice_input();
+    }
+}
+
 void send_typeless_option(ButtonAction action)
 {
     load_host_input_config();

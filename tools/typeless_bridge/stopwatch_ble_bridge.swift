@@ -26,6 +26,14 @@ private let typelessStartIdleGraceSeconds: TimeInterval = 1.0
 private let typelessProcessingIdleGraceSeconds: TimeInterval = 1.2
 private let typelessProcessingMaximumSeconds: TimeInterval = 2.8
 
+private enum MicrophoneControlCommand: UInt8 {
+    case disable = 0
+    case continuous = 1
+    case armOnDemand = 2
+    case startVoice = 3
+    case stopVoice = 4
+}
+
 private func isSupportedDeviceName(_ name: String?) -> Bool {
     guard let name else { return false }
     return name.hasPrefix(deviceNamePrefix) || legacyDeviceNames.contains(name)
@@ -1749,7 +1757,6 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private var nameScanFallbackWorkItem: DispatchWorkItem?
     private var panelSequence = 1
     private var quotaFetchInFlight = false
-    private var panelRefreshQueued = false
     private var bridgeDiscoveryInFlight = false
     private var lastTimePanelPushAt = Date.distantPast
     private var typelessSessionActive = false
@@ -1763,6 +1770,11 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private var lastMicrophoneRecoveryAt = Date.distantPast
     private var lastMicrophoneHealthLogAt = Date.distantPast
     private var microphoneResubscribePending = false
+    private var microphoneOnDemandSupported: Bool?
+    private var microphoneControlQueue: [MicrophoneControlCommand] = []
+    private var activeMicrophoneControlCommand: MicrophoneControlCommand?
+    private var microphoneControlWriteInFlight = false
+    private var microphoneShortcutMonitor: Any?
     private var lastBridgeConfigPayload: String?
     private var statusWriteQueue: [(payload: String, label: String)] = []
     private var statusWriteInFlight = false
@@ -1776,11 +1788,34 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
                                                name: bridgeSettingsChangedNotification,
                                                object: nil)
         ensureAccessibilityPrompt(reason: "startup")
+        startMicrophoneShortcutMonitor()
         central = CBCentralManager(delegate: self, queue: .main)
     }
 
     deinit {
+        if let microphoneShortcutMonitor {
+            NSEvent.removeMonitor(microphoneShortcutMonitor)
+        }
         NotificationCenter.default.removeObserver(self)
+    }
+
+    private func startMicrophoneShortcutMonitor() {
+        microphoneShortcutMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard !event.isARepeat else { return }
+            let keyCode = UInt16(event.keyCode)
+            DispatchQueue.main.async { [weak self] in
+                guard let self,
+                      SettingsStore.shared.settings.virtualMicrophoneEnabled,
+                      SettingsStore.shared.settings.inputMode == .typeless,
+                      SettingsStore.shared.settings.leftKey.macKeyCode == keyCode,
+                      self.lastState?.phase != "recording",
+                      !self.typelessSessionActive else {
+                    return
+                }
+                self.queueMicrophoneControl(.startVoice)
+                log("microphone wake requested by Typeless shortcut")
+            }
+        }
     }
 
     @objc private func settingsChanged() {
@@ -1983,8 +2018,8 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
                 if characteristic.isNotifying,
                    SettingsStore.shared.settings.virtualMicrophoneEnabled {
                     microphoneResubscribePending = false
-                    sendMicrophoneControl(start: true)
-                    BridgeStatusCenter.shared.microphoneStatus = "Streaming"
+                    queueMicrophoneControl(.armOnDemand)
+                    BridgeStatusCenter.shared.microphoneStatus = "Ready"
                 }
             }
             return
@@ -2033,10 +2068,11 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
                     didWriteValueFor characteristic: CBCharacteristic,
                     error: Error?) {
         if characteristic.uuid == stopWatchMicrophoneControlUUID {
-            if let error {
-                BridgeStatusCenter.shared.microphoneStatus = "Control failed"
-                BridgeStatusCenter.shared.lastError = error.localizedDescription
-            }
+            let command = activeMicrophoneControlCommand
+            activeMicrophoneControlCommand = nil
+            microphoneControlWriteInFlight = false
+            handleMicrophoneControlResult(command, error: error)
+            sendNextMicrophoneControl()
             return
         }
         guard characteristic.uuid == statusUUID else { return }
@@ -2123,6 +2159,10 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         statusWriteInFlight = false
         bridgeDiscoveryInFlight = false
         microphoneResubscribePending = false
+        microphoneOnDemandSupported = nil
+        microphoneControlQueue.removeAll()
+        activeMicrophoneControlCommand = nil
+        microphoneControlWriteInFlight = false
     }
 
     private func discoverBridgeServices(_ peripheral: CBPeripheral, reason: String) {
@@ -2138,7 +2178,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     func setVirtualMicrophoneEnabled(_ enabled: Bool) {
         guard enabled else {
             microphoneResubscribePending = false
-            sendMicrophoneControl(start: false)
+            queueMicrophoneControl(.disable)
             if let peripheral, let audio = microphoneAudioCharacteristic, audio.isNotifying {
                 peripheral.setNotifyValue(false, for: audio)
             }
@@ -2166,21 +2206,74 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         if !audio.isNotifying {
             peripheral.setNotifyValue(true, for: audio)
         } else {
-            sendMicrophoneControl(start: true)
+            queueMicrophoneControl(.armOnDemand)
         }
         if let stats = microphoneStatsCharacteristic, !stats.isNotifying {
             peripheral.setNotifyValue(true, for: stats)
         }
     }
 
-    private func sendMicrophoneControl(start: Bool) {
-        guard let peripheral, let control = microphoneControlCharacteristic else { return }
-        if start {
+    private func queueMicrophoneControl(_ command: MicrophoneControlCommand) {
+        if (command == .startVoice || command == .stopVoice), microphoneOnDemandSupported != true {
+            return
+        }
+        if activeMicrophoneControlCommand == command || microphoneControlQueue.last == command {
+            return
+        }
+        microphoneControlQueue.append(command)
+        sendNextMicrophoneControl()
+    }
+
+    private func sendNextMicrophoneControl() {
+        guard !microphoneControlWriteInFlight,
+              !microphoneControlQueue.isEmpty,
+              let peripheral,
+              let control = microphoneControlCharacteristic else {
+            return
+        }
+        let command = microphoneControlQueue.removeFirst()
+        if command == .startVoice || command == .continuous {
             microphonePipeline.prepareForStreamRestart()
         }
         let type: CBCharacteristicWriteType = control.properties.contains(.write) ? .withResponse : .withoutResponse
-        peripheral.writeValue(Data([start ? 1 : 0]), for: control, type: type)
-        log("microphone control: \(start ? "start" : "stop")")
+        activeMicrophoneControlCommand = command
+        microphoneControlWriteInFlight = type == .withResponse
+        peripheral.writeValue(Data([command.rawValue]), for: control, type: type)
+        log("microphone control: \(command)")
+        if type == .withoutResponse {
+            activeMicrophoneControlCommand = nil
+            handleMicrophoneControlResult(command, error: nil)
+            sendNextMicrophoneControl()
+        }
+    }
+
+    private func handleMicrophoneControlResult(_ command: MicrophoneControlCommand?, error: Error?) {
+        guard let command else { return }
+        if let error {
+            if command == .armOnDemand {
+                microphoneOnDemandSupported = false
+                BridgeStatusCenter.shared.microphoneStatus = "Streaming (legacy firmware)"
+                log("on-demand microphone unsupported; falling back to continuous stream: \(error.localizedDescription)")
+                queueMicrophoneControl(.continuous)
+                return
+            }
+            BridgeStatusCenter.shared.microphoneStatus = "Control failed"
+            BridgeStatusCenter.shared.lastError = error.localizedDescription
+            return
+        }
+        switch command {
+        case .disable:
+            BridgeStatusCenter.shared.microphoneStatus = "Off"
+        case .continuous:
+            BridgeStatusCenter.shared.microphoneStatus = "Streaming (legacy firmware)"
+        case .armOnDemand:
+            microphoneOnDemandSupported = true
+            BridgeStatusCenter.shared.microphoneStatus = "Ready"
+        case .startVoice:
+            BridgeStatusCenter.shared.microphoneStatus = "Streaming"
+        case .stopVoice:
+            BridgeStatusCenter.shared.microphoneStatus = "Ready"
+        }
     }
 
     private func startHealthLoop() {
@@ -2407,7 +2500,6 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             }
             typelessPrimaryDownAt = now
             typelessPrimaryIsDown = true
-            typelessSessionActive = false
             handleTypelessPrimaryDownStatus()
         case .wechatIME:
             handleWeChatOptionDown()
@@ -2418,13 +2510,12 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         OpenWatcherHomeActivityTracker.shared.record("primary_up", weight: 0.6)
         switch SettingsStore.shared.settings.inputMode {
         case .typeless:
-            guard typelessPrimaryIsDown || typelessSessionActive || lastState?.phase == "recording" else {
-                log("typeless primary up observed; no active local session")
+            guard typelessPrimaryIsDown else {
+                log("typeless primary up observed; no active key press")
                 return
             }
             typelessPrimaryIsDown = false
-            log("typeless primary up observed; firmware owns HID release")
-            handleTypelessStopStatus(reason: "release")
+            log("typeless primary up observed; ignored in toggle mode, firmware owns HID release")
         case .wechatIME:
             handleWeChatOptionUp()
         }
@@ -2488,10 +2579,11 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
 
     private func handleTypelessPrimaryDownStatus() {
         if processingUntil != nil || lastState?.phase == "processing" {
-            resetTypelessSessionTracking(clearFocus: true)
+            typelessSessionActive = false
+            processingUntil = nil
+            processingStartedAt = nil
             write(VoiceState(active: false, phase: "idle", message: ""))
-            log("typeless primary observed while processing; cleared device processing state")
-            return
+            log("typeless primary observed while processing; restarting recording")
         }
 
         let shouldStop = typelessSessionActive ||
@@ -2775,16 +2867,8 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             return VoiceState(active: true, phase: "processing", message: "")
         }
         let detected = currentTypelessState()
-        if typelessPrimaryIsDown {
+        if typelessPrimaryIsDown || typelessSessionActive {
             return VoiceState(active: true, phase: "recording", message: "正在录制中")
-        }
-        if typelessSessionActive && detected.phase == "idle" && detected.message == "Typeless 待机" {
-            if let lastDown = typelessPrimaryDownAt,
-               Date().timeIntervalSince(lastDown) <= typelessStartIdleGraceSeconds {
-                return VoiceState(active: true, phase: "recording", message: "正在录制中")
-            }
-            typelessSessionActive = false
-            return detected
         }
         return detected
     }
@@ -2799,26 +2883,16 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         BridgeStatusCenter.shared.typelessStatus = state.message.isEmpty ? state.phase : state.message
         switch state.phase {
         case "recording":
+            queueMicrophoneControl(.startVoice)
             OpenWatcherHomeActivityTracker.shared.record("recording", weight: 0.85)
         case "processing":
+            queueMicrophoneControl(.stopVoice)
             OpenWatcherHomeActivityTracker.shared.record("processing", weight: 0.9)
         default:
+            queueMicrophoneControl(.stopVoice)
             OpenWatcherHomeActivityTracker.shared.record("idle", weight: 0.15)
         }
-        schedulePanelRefresh(reason: "voice")
         log("state \(state.phase) active=\(state.active) message=\(state.message)")
-    }
-
-    private func schedulePanelRefresh(reason: String) {
-        guard panelCharacteristic != nil, !panelRefreshQueued else {
-            return
-        }
-        panelRefreshQueued = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-            guard let self else { return }
-            self.panelRefreshQueued = false
-            self.pushQuotaPanel(reason: reason)
-        }
     }
 }
 

@@ -33,6 +33,7 @@ private:
     uint32_t _applied_host_voice_sequence = 0;
     uint32_t _applied_host_panel_sequence = 0;
     uint32_t _last_view_update_ms = 0;
+    uint32_t _last_status_bar_update_ms = 0;
     uint32_t _last_battery_check_ms = 0;
     bool _applied_ble_connected = false;
     bool _voice_active = false;

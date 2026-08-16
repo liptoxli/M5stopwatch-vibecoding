@@ -16,8 +16,7 @@ using namespace mooncake;
 
 namespace {
 
-constexpr uint32_t kIdleViewFrameMs = 50;
-constexpr uint32_t kActiveViewFrameMs = 33;
+constexpr uint32_t kStatusBarFrameMs = 50;
 constexpr const char* kCodexSettingsNs = "codex";
 constexpr const char* kThemeKey = "theme";
 constexpr const char* kThemeOpenWatcherV2 = "openwatcher_v2";
@@ -62,6 +61,7 @@ void AppCodex::onOpen()
     _applied_voice_mode = view::CodexView::VoiceMode::Idle;
     _voice_mode_since_ms = GetHAL().millis();
     _last_view_update_ms = 0;
+    _last_status_bar_update_ms = 0;
     _last_battery_check_ms = GetHAL().millis();
     _quota_client.start();
 
@@ -110,6 +110,7 @@ void AppCodex::onRunning()
         if (_voice_mode != previous_mode) {
             _voice_mode_since_ms = GetHAL().millis();
         }
+        ble_bridge::set_voice_capture_active(_voice_mode == view::CodexView::VoiceMode::Recording);
         _applied_host_voice_sequence = host_voice_sequence;
         mclog::tagDebug(getAppInfo().name, "Typeless host voice correction: {}", _voice_active);
     }
@@ -132,20 +133,34 @@ void AppCodex::onRunning()
     }
 
     const auto quota_snapshot = _quota_client.snapshot();
+    const bool quota_changed = quota_snapshot.sequence != 0 &&
+                               quota_snapshot.sequence != _applied_quota_sequence;
+    const bool ble_connected = ble_bridge::is_connected();
+    const uint32_t ble_status_sequence = ble_bridge::host_status_sequence();
+    const bool ble_changed = ble_connected != _applied_ble_connected ||
+                             ble_status_sequence != _applied_ble_status_sequence;
+    const bool voice_changed = _voice_active != _applied_voice_active ||
+                               _voice_mode != _applied_voice_mode;
+    const uint32_t frame_ms = _view ? _view->frameIntervalMs() : 100;
+    const bool view_due = _view && now - _last_view_update_ms >= frame_ms;
+    const bool status_bar_due = now - _last_status_bar_update_ms >= kStatusBarFrameMs;
+
+    if (!quota_changed && !ble_changed && !voice_changed && !view_due && !status_bar_due) {
+        return;
+    }
+
     bool view_state_changed = false;
 
     LvglLockGuard lock;
 
     if (_view) {
-        if (quota_snapshot.sequence != 0 && quota_snapshot.sequence != _applied_quota_sequence) {
+        if (quota_changed) {
             _view->applySnapshot(quota_snapshot);
             _applied_quota_sequence = quota_snapshot.sequence;
             view_state_changed = true;
         }
 
-        const bool ble_connected = ble_bridge::is_connected();
-        const uint32_t ble_status_sequence = ble_bridge::host_status_sequence();
-        if (ble_connected != _applied_ble_connected || ble_status_sequence != _applied_ble_status_sequence) {
+        if (ble_changed) {
             _view->applyBleState(ble_connected,
                                  ble_bridge::host_status_text(),
                                  ble_status_sequence != _applied_ble_status_sequence);
@@ -153,21 +168,23 @@ void AppCodex::onRunning()
             _applied_ble_status_sequence = ble_status_sequence;
             view_state_changed = true;
         }
-        if (_voice_active != _applied_voice_active || _voice_mode != _applied_voice_mode) {
+        if (voice_changed) {
             _view->setVoiceMode(_voice_mode);
             _applied_voice_active = _voice_active;
             _applied_voice_mode = _voice_mode;
             view_state_changed = true;
         }
 
-        const uint32_t frame_ms = _voice_mode == view::CodexView::VoiceMode::Idle ? kIdleViewFrameMs : kActiveViewFrameMs;
-        if (view_state_changed || now - _last_view_update_ms >= frame_ms) {
+        if (view_state_changed || view_due) {
             _view->update();
             _last_view_update_ms = now;
         }
     }
-    updateBatteryStatusBar(now);
-    view::update_status_bar();
+    if (status_bar_due) {
+        updateBatteryStatusBar(now);
+        view::update_status_bar();
+        _last_status_bar_update_ms = now;
+    }
 }
 
 void AppCodex::updateBatteryStatusBar(uint32_t now)
@@ -193,6 +210,7 @@ void AppCodex::handleBluetoothKeys()
     if (hal.btnA.wasPressed()) {
         const uint32_t now = GetHAL().millis();
         const bool typeless_mode = ble_bridge::is_typeless_input_mode();
+        const bool starting_voice = !typeless_mode || !_voice_active;
         _primary_input_down_ms = now;
         if (typeless_mode && _voice_active) {
             _voice_mode = view::CodexView::VoiceMode::Processing;
@@ -201,6 +219,7 @@ void AppCodex::handleBluetoothKeys()
             _voice_mode = view::CodexView::VoiceMode::Recording;
         }
         _voice_mode_since_ms = now;
+        ble_bridge::set_voice_capture_active(starting_voice);
         mclog::tagDebug(getAppInfo().name, "BLE key A: primary input down");
         ble_bridge::send_typeless_option(ble_bridge::ButtonAction::Down);
     }
@@ -212,6 +231,7 @@ void AppCodex::handleBluetoothKeys()
             _voice_active = false;
             _voice_mode = view::CodexView::VoiceMode::Idle;
             _voice_mode_since_ms = GetHAL().millis();
+            ble_bridge::set_voice_capture_active(false);
         }
         mclog::tagDebug(getAppInfo().name, "BLE key A: primary input up");
         ble_bridge::send_typeless_option(ble_bridge::ButtonAction::Up);
@@ -229,6 +249,7 @@ void AppCodex::handleBluetoothKeys()
             _voice_mode = view::CodexView::VoiceMode::Idle;
             _voice_mode_since_ms = GetHAL().millis();
         }
+        ble_bridge::set_voice_capture_active(false);
         mclog::tagDebug(getAppInfo().name, "BLE key B: confirm long press");
         ble_bridge::send_confirm_long_press();
     }
@@ -247,6 +268,7 @@ void AppCodex::handleBluetoothKeys()
         } else {
             mclog::tagDebug(getAppInfo().name, "BLE key B: Enter tap");
         }
+        ble_bridge::set_voice_capture_active(false);
         ble_bridge::send_codex_enter();
     }
 }
@@ -258,6 +280,7 @@ void AppCodex::onClose()
     if (_voice_active) {
         ble_bridge::send_typeless_option(ble_bridge::ButtonAction::Up);
     }
+    ble_bridge::set_voice_capture_active(false);
     _key_manager.reset();
     _voice_active = false;
     _applied_voice_active = false;
@@ -265,6 +288,7 @@ void AppCodex::onClose()
     _applied_voice_mode = view::CodexView::VoiceMode::Idle;
     _voice_mode_since_ms = GetHAL().millis();
     _last_battery_check_ms = 0;
+    _last_status_bar_update_ms = 0;
     _quota_client.stop();
 
     LvglLockGuard lock;

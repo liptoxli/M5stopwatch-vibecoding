@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <string_view>
 #include <ctime>
 
 using namespace view;
@@ -32,6 +33,7 @@ constexpr uint32_t kOwPanel      = 0x10161F;
 constexpr uint32_t kOwPanelAlt   = 0x121C29;
 constexpr uint32_t kOwBlue       = 0x35B8FF;
 constexpr uint32_t kOwGreen      = 0x55F36A;
+constexpr uint32_t kOwToday      = 0xFF7438;
 constexpr uint32_t kOwAmber      = 0xFFC542;
 constexpr uint32_t kOwTeal       = 0x2DF1D3;
 constexpr uint32_t kOwSoftText   = 0xADB9CC;
@@ -52,6 +54,24 @@ constexpr int kQuotaRightLabelX = kScreenCenter + kQuotaRadius - kQuotaEndpointL
 constexpr int kQuotaCaptionY = kScreenCenter - 38;
 constexpr int kQuotaValueY = kScreenCenter - 16;
 constexpr int kQuotaGradientHalfAngle = 3;
+
+void setLabelTextIfChanged(Label& label, std::string_view text)
+{
+    const char* current = label.getText();
+    if (current != nullptr && text == current) {
+        return;
+    }
+    label.setText(text);
+}
+
+template <typename WidgetT>
+void setHiddenIfChanged(WidgetT& widget, bool hidden)
+{
+    const bool currently_hidden = lv_obj_has_flag(widget.get(), LV_OBJ_FLAG_HIDDEN);
+    if (currently_hidden != hidden) {
+        widget.setHidden(hidden);
+    }
+}
 
 uint32_t blendRgb(uint32_t from, uint32_t to, float amount)
 {
@@ -156,6 +176,24 @@ uint32_t quota_semantic_color(float fraction)
         return blend_color(kOwAmber, 0xBDEB38, (value - 0.34f) / 0.34f);
     }
     return blend_color(0xBDEB38, kOwGreen, (value - 0.68f) / 0.32f);
+}
+
+uint32_t activity_heat_color(float activity)
+{
+    const float value = clamp01(activity);
+    if (value <= 0.001f) {
+        return 0x142236;
+    }
+    if (value < 0.25f) {
+        return 0x18364A;
+    }
+    if (value < 0.50f) {
+        return 0x176078;
+    }
+    if (value < 0.75f) {
+        return 0x1591A2;
+    }
+    return kOwTeal;
 }
 
 template <size_t N>
@@ -270,12 +308,16 @@ void CodexView::init(lv_obj_t* parent, ThemeMode themeMode)
 
     _message_label = std::make_unique<Label>(_panel->get());
     _message_label->setText(_state.message.c_str());
-    _message_label->setTextFont(&lv_font_montserrat_24);
-    _message_label->setTextColor(lv_color_hex(kColorText));
+    _message_label->setTextFont(_theme_mode == ThemeMode::OpenWatcherV2
+                                    ? &lv_font_montserrat_18
+                                    : &lv_font_montserrat_24);
+    _message_label->setTextColor(lv_color_hex(_theme_mode == ThemeMode::OpenWatcherV2
+                                                  ? kOwSoftText
+                                                  : kColorText));
     _message_label->setWidth(260);
     _message_label->setLongMode(LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
     _message_label->setTextAlign(LV_TEXT_ALIGN_CENTER);
-    _message_label->align(LV_ALIGN_TOP_MID, 0, _theme_mode == ThemeMode::OpenWatcherV2 ? 276 : 327);
+    _message_label->align(LV_ALIGN_TOP_MID, 0, _theme_mode == ThemeMode::OpenWatcherV2 ? 354 : 327);
 
     _message_image = std::make_unique<Image>(_panel->get());
     _message_image->setSrc(&codex_pet_msg_idle_0);
@@ -296,7 +338,7 @@ void CodexView::init(lv_obj_t* parent, ThemeMode themeMode)
     _ble_dot->setBgColor(lv_color_hex(0x2F79FF));
     _ble_dot->align(_theme_mode == ThemeMode::OpenWatcherV2 ? LV_ALIGN_BOTTOM_MID : LV_ALIGN_TOP_MID,
                     -7,
-                    _theme_mode == ThemeMode::OpenWatcherV2 ? -34 : 71);
+                    _theme_mode == ThemeMode::OpenWatcherV2 ? -22 : 71);
 
     _wifi_dot = std::make_unique<Container>(_panel->get());
     _wifi_dot->setSize(8, 8);
@@ -305,11 +347,10 @@ void CodexView::init(lv_obj_t* parent, ThemeMode themeMode)
     _wifi_dot->setBgColor(lv_color_hex(0x38E07D));
     _wifi_dot->align(_theme_mode == ThemeMode::OpenWatcherV2 ? LV_ALIGN_BOTTOM_MID : LV_ALIGN_TOP_MID,
                      7,
-                     _theme_mode == ThemeMode::OpenWatcherV2 ? -34 : 71);
+                     _theme_mode == ThemeMode::OpenWatcherV2 ? -22 : 71);
 
     updateConnectionDots();
     if (_theme_mode == ThemeMode::OpenWatcherV2) {
-        updateV2QuotaRing(_v2_week_ring, _state.weekly, "WEEK");
         updateOpenWatcherV2Labels();
     } else {
         updateSemicircleQuota();
@@ -319,27 +360,30 @@ void CodexView::init(lv_obj_t* parent, ThemeMode themeMode)
 
 void CodexView::update()
 {
-    if (_theme_mode == ThemeMode::OpenWatcherV2) {
-        updateOpenWatcherV2Labels();
-        if (_v2_canvas) {
-            lv_obj_invalidate(_v2_canvas->get());
-        }
-    } else {
+    if (_theme_mode != ThemeMode::OpenWatcherV2) {
         updateFlipClock();
     }
 
     const uint32_t now = GetHAL().millis();
     if (_state.messageExpiresAtMs != 0 && now > _state.messageExpiresAtMs) {
         _state.messageExpiresAtMs = 0;
-        const bool voice_visible = _voice_mode != VoiceMode::Idle;
-        if (_message_image_active) {
-            setIdleMessageImage(++_message_phrase_counter + now);
+        if (_theme_mode == ThemeMode::OpenWatcherV2) {
+            _state.message.clear();
+            if (_message_label) {
+                _message_label->setText("");
+                _message_label->setHidden(true);
+            }
         } else {
-            _state.message = pick_idle_phrase(++_message_phrase_counter + now);
-        }
-        if (_message_label && !_message_image_active) {
-            _message_label->setHidden(voice_visible);
-            _message_label->setText(_state.message.c_str());
+            const bool voice_visible = _voice_mode != VoiceMode::Idle;
+            if (_message_image_active) {
+                setIdleMessageImage(++_message_phrase_counter + now);
+            } else {
+                _state.message = pick_idle_phrase(++_message_phrase_counter + now);
+            }
+            if (_message_label && !_message_image_active) {
+                _message_label->setHidden(voice_visible);
+                _message_label->setText(_state.message.c_str());
+            }
         }
     }
 
@@ -380,6 +424,9 @@ void CodexView::applyQuota(int weeklyLeftPct,
 
 void CodexView::applySnapshot(const codex::QuotaSnapshot& snapshot)
 {
+    const int previous_week_pct = static_cast<int>(std::lround(remainingRatio(_state.weekly) * 100.0f));
+    const auto previous_activity_buckets = _state.activityBuckets;
+
     _state.wifiConnected = snapshot.wifiConnected;
     _state.processing = snapshot.processing;
     _state.source = snapshot.source;
@@ -414,11 +461,14 @@ void CodexView::applySnapshot(const codex::QuotaSnapshot& snapshot)
         _state.weekly.resetInLabel = "--";
     }
 
+    const int updated_week_pct = static_cast<int>(std::lround(remainingRatio(_state.weekly) * 100.0f));
+    const bool v2_canvas_changed = previous_week_pct != updated_week_pct ||
+                                   previous_activity_buckets != _state.activityBuckets;
+
     updateConnectionDots();
     if (_theme_mode == ThemeMode::OpenWatcherV2) {
-        updateV2QuotaRing(_v2_week_ring, _state.weekly, "WEEK");
         updateOpenWatcherV2Labels();
-        if (_v2_canvas) {
+        if (v2_canvas_changed && _v2_canvas) {
             lv_obj_invalidate(_v2_canvas->get());
         }
     } else {
@@ -499,10 +549,18 @@ void CodexView::setVoiceMode(VoiceMode mode)
     if (_message_image) {
         _message_image->setHidden(visible || !_message_image_active);
     }
-    updateOpenWatcherV2Labels();
-    if (_theme_mode == ThemeMode::OpenWatcherV2 && _v2_canvas) {
-        lv_obj_invalidate(_v2_canvas->get());
+    if (_v2_sync_indicator) {
+        setHiddenIfChanged(*_v2_sync_indicator, visible);
     }
+    updateOpenWatcherV2Labels();
+}
+
+uint32_t CodexView::frameIntervalMs() const
+{
+    if (_theme_mode == ThemeMode::OpenWatcherV2) {
+        return 100;
+    }
+    return _voice_mode == VoiceMode::Idle ? kPetIdleFrameMs : kPetActiveFrameMs;
 }
 
 bool CodexView::consumeClearInputRequest()
@@ -760,94 +818,108 @@ void CodexView::initOpenWatcherV2()
     lv_obj_add_event_cb(_v2_canvas->get(), &CodexView::drawOpenWatcherV2Event, LV_EVENT_DRAW_MAIN_BEGIN, this);
 
     _v2_title_label = std::make_unique<Label>(_panel->get());
-    _v2_title_label->setText("CODEX READY");
-    _v2_title_label->setTextFont(&lv_font_montserrat_22);
+    _v2_title_label->setText("Codex Ready");
+    _v2_title_label->setTextFont(&lv_font_montserrat_24);
     _v2_title_label->setTextColor(lv_color_hex(kOwBlue));
     _v2_title_label->setWidth(280);
     _v2_title_label->setTextAlign(LV_TEXT_ALIGN_CENTER);
     _v2_title_label->setLongMode(LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
-    _v2_title_label->align(LV_ALIGN_TOP_MID, 0, 28);
+    _v2_title_label->align(LV_ALIGN_TOP_MID, 0, 40);
 
-    _v2_context_label = std::make_unique<Label>(_panel->get());
-    _v2_context_label->setText("--");
-    _v2_context_label->setTextFont(&MontserratSemiBold26);
-    _v2_context_label->setTextColor(lv_color_hex(0xFFFFFF));
-    _v2_context_label->setWidth(260);
-    _v2_context_label->setTextAlign(LV_TEXT_ALIGN_CENTER);
-    _v2_context_label->align(LV_ALIGN_TOP_MID, 0, 68);
+    _v2_left_caption_label = std::make_unique<Label>(_panel->get());
+    _v2_left_caption_label->setText("LEFT");
+    _v2_left_caption_label->setTextFont(&lv_font_montserrat_20);
+    _v2_left_caption_label->setTextColor(lv_color_hex(kOwSoftText));
+    _v2_left_caption_label->setWidth(120);
+    _v2_left_caption_label->setTextAlign(LV_TEXT_ALIGN_CENTER);
+    _v2_left_caption_label->align(LV_ALIGN_TOP_MID, 0, 80);
+
+    _v2_remaining_value_label = std::make_unique<Label>(_panel->get());
+    _v2_remaining_value_label->setText("--");
+    _v2_remaining_value_label->setTextFont(&CommissionerMedium64);
+    _v2_remaining_value_label->setTextColor(lv_color_hex(kOwGreen));
+    _v2_remaining_value_label->setWidth(155);
+    _v2_remaining_value_label->setTextAlign(LV_TEXT_ALIGN_RIGHT);
+    _v2_remaining_value_label->align(LV_ALIGN_TOP_LEFT, 130, 107);
+
+    _v2_remaining_unit_label = std::make_unique<Label>(_panel->get());
+    _v2_remaining_unit_label->setText("%");
+    _v2_remaining_unit_label->setTextFont(&lv_font_montserrat_48);
+    _v2_remaining_unit_label->setTextColor(lv_color_hex(kOwGreen));
+    _v2_remaining_unit_label->setWidth(70);
+    _v2_remaining_unit_label->setTextAlign(LV_TEXT_ALIGN_LEFT);
+    _v2_remaining_unit_label->align(LV_ALIGN_TOP_LEFT, 285, 139);
+
+    _v2_today_caption_label = std::make_unique<Label>(_panel->get());
+    _v2_today_caption_label->setText("TODAY");
+    _v2_today_caption_label->setTextFont(&lv_font_montserrat_18);
+    _v2_today_caption_label->setTextColor(lv_color_hex(kOwToday));
+    _v2_today_caption_label->setWidth(100);
+    _v2_today_caption_label->setTextAlign(LV_TEXT_ALIGN_LEFT);
+    _v2_today_caption_label->align(LV_ALIGN_TOP_LEFT, 58, 122);
+
+    _v2_today_value_label = std::make_unique<Label>(_panel->get());
+    _v2_today_value_label->setText("--%");
+    _v2_today_value_label->setTextFont(&lv_font_montserrat_36);
+    _v2_today_value_label->setTextColor(lv_color_hex(kOwToday));
+    _v2_today_value_label->setWidth(110);
+    _v2_today_value_label->setTextAlign(LV_TEXT_ALIGN_LEFT);
+    _v2_today_value_label->align(LV_ALIGN_TOP_LEFT, 55, 145);
 
     _v2_status_label = std::make_unique<Label>(_panel->get());
-    _v2_status_label->setText("READY");
+    _v2_status_label->setText("");
     _v2_status_label->setTextFont(&lv_font_montserrat_22);
     _v2_status_label->setTextColor(lv_color_hex(kOwBlue));
     _v2_status_label->setWidth(180);
     _v2_status_label->setTextAlign(LV_TEXT_ALIGN_CENTER);
-    _v2_status_label->align(LV_ALIGN_TOP_MID, 0, 101);
+    _v2_status_label->align(LV_ALIGN_TOP_MID, 0, 199);
+    _v2_status_label->setHidden(true);
 
     _v2_meta_left_label = std::make_unique<Label>(_panel->get());
     _v2_meta_left_label->setText("BLE --");
-    _v2_meta_left_label->setTextFont(&lv_font_montserrat_22);
+    _v2_meta_left_label->setTextFont(&lv_font_montserrat_18);
     _v2_meta_left_label->setTextColor(lv_color_hex(kOwSoftText));
     _v2_meta_left_label->setWidth(150);
     _v2_meta_left_label->setTextAlign(LV_TEXT_ALIGN_LEFT);
-    _v2_meta_left_label->align(LV_ALIGN_TOP_LEFT, 78, 112);
+    _v2_meta_left_label->align(LV_ALIGN_TOP_LEFT, 46, 232);
 
     _v2_meta_right_label = std::make_unique<Label>(_panel->get());
     _v2_meta_right_label->setText("WIFI --");
-    _v2_meta_right_label->setTextFont(&lv_font_montserrat_22);
+    _v2_meta_right_label->setTextFont(&lv_font_montserrat_18);
     _v2_meta_right_label->setTextColor(lv_color_hex(kOwSoftText));
     _v2_meta_right_label->setWidth(150);
     _v2_meta_right_label->setTextAlign(LV_TEXT_ALIGN_RIGHT);
-    _v2_meta_right_label->align(LV_ALIGN_TOP_RIGHT, -78, 112);
+    _v2_meta_right_label->align(LV_ALIGN_TOP_RIGHT, -46, 232);
 
-    initV2QuotaRing(_v2_week_ring, "WEEK", lv_color_hex(0x7C66FF), 233, 374);
-}
+    _v2_sync_indicator = std::make_unique<Container>(_panel->get());
+    _v2_sync_indicator->setSize(140, 14);
+    _v2_sync_indicator->align(LV_ALIGN_TOP_MID, 0, 378);
+    _v2_sync_indicator->setBgOpa(LV_OPA_TRANSP);
+    _v2_sync_indicator->setBorderWidth(0);
+    _v2_sync_indicator->setPaddingAll(0);
+    _v2_sync_indicator->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
 
-void CodexView::initV2QuotaRing(V2QuotaRing& ring,
-                                const char* title,
-                                lv_color_t color,
-                                int centerX,
-                                int centerY)
-{
-    ring.percentLabel = std::make_unique<Label>(_panel->get());
-    ring.percentLabel->setText("--%");
-    ring.percentLabel->setTextFont(&MontserratSemiBold26);
-    ring.percentLabel->setTextColor(color);
-    ring.percentLabel->setWidth(82);
-    ring.percentLabel->setTextAlign(LV_TEXT_ALIGN_CENTER);
-    ring.percentLabel->align(LV_ALIGN_TOP_LEFT, centerX - 41, centerY - 28);
+    _v2_sync_left_line = std::make_unique<Container>(_v2_sync_indicator->get());
+    _v2_sync_left_line->setSize(45, 1);
+    _v2_sync_left_line->align(LV_ALIGN_LEFT_MID, 0, 0);
+    _v2_sync_left_line->setBgColor(lv_color_hex(0xA7F000));
+    _v2_sync_left_line->setBgOpa(210);
+    _v2_sync_left_line->setBorderWidth(0);
 
-    ring.resetLabel = std::make_unique<Label>(_panel->get());
-    ring.resetLabel->setText("--");
-    ring.resetLabel->setTextFont(&lv_font_montserrat_22);
-    ring.resetLabel->setTextColor(lv_color_hex(kOwSoftText));
-    ring.resetLabel->setWidth(92);
-    ring.resetLabel->setTextAlign(LV_TEXT_ALIGN_CENTER);
-    ring.resetLabel->align(LV_ALIGN_TOP_LEFT, centerX - 46, centerY + 2);
+    _v2_sync_right_line = std::make_unique<Container>(_v2_sync_indicator->get());
+    _v2_sync_right_line->setSize(45, 1);
+    _v2_sync_right_line->align(LV_ALIGN_RIGHT_MID, 0, 0);
+    _v2_sync_right_line->setBgColor(lv_color_hex(0xA7F000));
+    _v2_sync_right_line->setBgOpa(210);
+    _v2_sync_right_line->setBorderWidth(0);
 
-    ring.titleLabel = std::make_unique<Label>(_panel->get());
-    ring.titleLabel->setText(title);
-    ring.titleLabel->setTextFont(&lv_font_montserrat_22);
-    ring.titleLabel->setTextColor(lv_color_hex(kOwSoftText));
-    ring.titleLabel->setWidth(74);
-    ring.titleLabel->setTextAlign(LV_TEXT_ALIGN_CENTER);
-    ring.titleLabel->align(LV_ALIGN_TOP_LEFT, centerX - 37, centerY + 34);
-}
-
-void CodexView::updateV2QuotaRing(V2QuotaRing& ring, const QuotaSlot& slot, const char* title)
-{
-    const float ratio = remainingRatio(slot);
-    if (ring.percentLabel) {
-        char pct[8];
-        std::snprintf(pct, sizeof(pct), "%d%%", static_cast<int>(std::lround(ratio * 100.0f)));
-        ring.percentLabel->setText(pct);
-    }
-    if (ring.resetLabel) {
-        ring.resetLabel->setText(slot.resetInLabel.c_str());
-    }
-    if (ring.titleLabel) {
-        ring.titleLabel->setText(title);
-    }
+    _v2_sync_dot = std::make_unique<Container>(_v2_sync_indicator->get());
+    _v2_sync_dot->setSize(7, 7);
+    _v2_sync_dot->align(LV_ALIGN_CENTER, 0, 0);
+    _v2_sync_dot->setRadius(LV_RADIUS_CIRCLE);
+    _v2_sync_dot->setBgColor(lv_color_hex(0xC9FF53));
+    _v2_sync_dot->setBgOpa(LV_OPA_COVER);
+    _v2_sync_dot->setBorderWidth(0);
 }
 
 void CodexView::updateOpenWatcherV2Labels()
@@ -858,30 +930,42 @@ void CodexView::updateOpenWatcherV2Labels()
 
     const int week_pct = static_cast<int>(std::lround(remainingRatio(_state.weekly) * 100.0f));
     if (_v2_title_label) {
-        _v2_title_label->setText(_state.sessionTitle.c_str());
+        setLabelTextIfChanged(*_v2_title_label, _state.sessionTitle);
     }
-    if (_v2_context_label) {
-        const std::string context = _state.contextLabel.empty() || _state.contextLabel == "-- / --"
-            ? (std::to_string(100 - week_pct) + "% / WEEK")
-            : _state.contextLabel;
-        _v2_context_label->setText(context.c_str());
+    if (_v2_remaining_value_label) {
+        const std::string remaining = std::to_string(week_pct);
+        setLabelTextIfChanged(*_v2_remaining_value_label, remaining);
+    }
+    if (_v2_today_value_label) {
+        const bool today_valid = _state.weeklyDayStartLeftPct >= 0;
+        const int today_pct = std::clamp(_state.weeklyTodayUsedPctPoints, 0, 100);
+        const std::string today = today_valid ? (std::to_string(today_pct) + "%") : "--%";
+        setLabelTextIfChanged(*_v2_today_value_label, today);
     }
     if (_v2_status_label) {
         const bool recording = _voice_mode == VoiceMode::Recording;
         const bool processing = _voice_mode == VoiceMode::Processing || _state.processing;
-        const char* text = _state.compactWarning ? "COMPACT SOON" : (recording ? "LISTENING" : (processing ? "PROCESSING" : "READY"));
+        const bool show_status = _state.compactWarning || recording || processing;
+        const char* text = _state.compactWarning ? "COMPACT SOON" : (recording ? "LISTENING" : "PROCESSING");
         const uint32_t color = _state.compactWarning ? kOwAmber : (recording ? kOwGreen : (processing ? kOwAmber : kOwBlue));
-        _v2_status_label->setText(text);
-        _v2_status_label->setTextColor(lv_color_hex(color));
+        const char* current = _v2_status_label->getText();
+        if (current == nullptr || std::string_view(current) != text) {
+            _v2_status_label->setText(text);
+            _v2_status_label->setTextColor(lv_color_hex(color));
+        }
+        setHiddenIfChanged(*_v2_status_label, !show_status);
     }
     if (_v2_meta_left_label) {
-        _v2_meta_left_label->setText((_state.modelLabel + " / " + _state.reasoningLabel).c_str());
-        _v2_meta_left_label->setTextColor(lv_color_hex(_state.bleConnected ? kOwBlue : kOwSoftText));
+        const std::string meta = _state.modelLabel + " / " + _state.reasoningLabel;
+        setLabelTextIfChanged(*_v2_meta_left_label, meta);
     }
     if (_v2_meta_right_label) {
-        const std::string activity = (_state.activityLive ? std::string("LIVE ") : std::string("")) + _state.activityLabel;
-        _v2_meta_right_label->setText(activity.c_str());
-        _v2_meta_right_label->setTextColor(lv_color_hex(_state.activityLive ? kOwGreen : kOwSoftText));
+        const std::string activity = _state.activityLive ? "LIVE -> NOW" : "2H -> NOW";
+        const char* current = _v2_meta_right_label->getText();
+        if (current == nullptr || std::string_view(current) != activity) {
+            _v2_meta_right_label->setText(activity.c_str());
+            _v2_meta_right_label->setTextColor(lv_color_hex(_state.activityLive ? kOwGreen : kOwSoftText));
+        }
     }
 }
 
@@ -918,9 +1002,6 @@ void CodexView::drawOpenWatcherV2(lv_layer_t* layer, const lv_area_t& coords)
     arc.rounded = 1;
 
     const float week = remainingRatio(_state.weekly);
-    const float context = _state.contextPressurePct > 0
-        ? clamp01(1.0f - static_cast<float>(_state.contextPressurePct) / 100.0f)
-        : week;
 
     arc.radius = 223;
     arc.width = 7;
@@ -934,10 +1015,10 @@ void CodexView::drawOpenWatcherV2(lv_layer_t* layer, const lv_area_t& coords)
     for (int i = 0; i < kTopSegments; ++i) {
         const float start = static_cast<float>(i) / static_cast<float>(kTopSegments);
         const float end = static_cast<float>(i + 1) / static_cast<float>(kTopSegments);
-        if (start >= context) {
+        if (start >= week) {
             break;
         }
-        const float active_end = std::min(end, context);
+        const float active_end = std::min(end, week);
         const int start_deg = 180 + static_cast<int>(std::lround(180.0f * start));
         const int end_deg = 180 + static_cast<int>(std::lround(180.0f * active_end)) - 1;
         if (end_deg <= start_deg) {
@@ -950,122 +1031,76 @@ void CodexView::drawOpenWatcherV2(lv_layer_t* layer, const lv_area_t& coords)
         lv_draw_arc(layer, &arc);
     }
 
-    auto draw_ring = [&](int cx, int cy, float fraction, uint32_t accent) {
-        lv_draw_arc_dsc_t ring;
-        lv_draw_arc_dsc_init(&ring);
-        ring.center = {static_cast<lv_coord_t>(coords.x1 + cx), static_cast<lv_coord_t>(coords.y1 + cy)};
-        ring.radius = 52;
-        ring.width = 5;
-        ring.rounded = 1;
-        ring.color = lv_color_hex(kOwTrack);
-        ring.opa = 190;
-        ring.start_angle = 112;
-        ring.end_angle = 428;
-        lv_draw_arc(layer, &ring);
-
-        constexpr int kSegments = 56;
-        for (int i = 0; i < kSegments; ++i) {
-            const float start = static_cast<float>(i) / static_cast<float>(kSegments);
-            const float end = static_cast<float>(i + 1) / static_cast<float>(kSegments);
-            if (start >= fraction) {
-                break;
-            }
-            const float active_end = std::min(end, fraction);
-            const int start_deg = 112 + static_cast<int>(std::lround(316.0f * start));
-            const int end_deg = 112 + static_cast<int>(std::lround(316.0f * active_end)) - 1;
-            if (end_deg <= start_deg) {
-                continue;
-            }
-            ring.color = lv_color_hex(blend_color(accent, quota_semantic_color((start + active_end) * 0.5f), 0.28f));
-            ring.opa = 245;
-            ring.start_angle = start_deg;
-            ring.end_angle = end_deg;
-            lv_draw_arc(layer, &ring);
-        }
-
-        ring.radius = 43;
-        ring.width = 3;
-        ring.color = lv_color_hex(0x2B254D);
-        ring.opa = 180;
-        ring.start_angle = 112;
-        ring.end_angle = 428;
-        lv_draw_arc(layer, &ring);
-    };
-
-    draw_ring(233, 374, week, 0x7C66FF);
-
     lv_draw_rect_dsc_t rect;
     lv_draw_rect_dsc_init(&rect);
-    constexpr int kBars = 24;
-    const int bucket_x = coords.x1 + 76;
-    const int bucket_y = coords.y1 + 139;
-    const int bucket_w = 23;
-    const int bucket_h = 43;
-    const int bucket_gap = 4;
-    const int row_gap = 10;
-    const uint32_t now = GetHAL().millis();
-    bool has_real_activity = false;
-    for (float bucket : _state.activityBuckets) {
-        if (bucket > 0.001f) {
-            has_real_activity = true;
-            break;
-        }
-    }
 
-    lv_area_t bucket_back = {
-        static_cast<lv_coord_t>(coords.x1 + 58),
-        static_cast<lv_coord_t>(coords.y1 + 124),
-        static_cast<lv_coord_t>(coords.x1 + 408),
-        static_cast<lv_coord_t>(coords.y1 + 263),
+    auto draw_line = [&](int x1, int y1, int x2, int y2, uint32_t color, int line_width, lv_opa_t opa) {
+        lv_draw_line_dsc_t line;
+        lv_draw_line_dsc_init(&line);
+        line.p1 = {static_cast<lv_value_precise_t>(coords.x1 + x1), static_cast<lv_value_precise_t>(coords.y1 + y1)};
+        line.p2 = {static_cast<lv_value_precise_t>(coords.x1 + x2), static_cast<lv_value_precise_t>(coords.y1 + y2)};
+        line.color = lv_color_hex(color);
+        line.width = line_width;
+        line.opa = opa;
+        line.round_start = 1;
+        line.round_end = 1;
+        lv_draw_line(layer, &line);
     };
-    rect.radius = 18;
-    rect.bg_color = lv_color_hex(kOwPanel);
-    rect.bg_opa = 132;
-    rect.border_width = 1;
-    rect.border_color = lv_color_hex(0x1F3248);
-    rect.border_opa = 130;
-    lv_draw_rect(layer, &rect, &bucket_back);
 
-    for (int i = 0; i < kBars; ++i) {
-        float activity = has_real_activity ? _state.activityBuckets[i] :
-            (0.18f + 0.38f * std::fabs(std::sin((static_cast<float>(i) * 0.42f) +
-                                                static_cast<float>((now / 900) % 100) * 0.08f)));
-        if (!has_real_activity) {
-            if (_voice_mode != VoiceMode::Idle || _state.processing) {
-                activity = std::min(1.0f, activity + 0.28f + 0.18f * std::sin(static_cast<float>(now % 600) / 600.0f * 6.283185f + i));
-            }
-        }
+    draw_line(50, 181, 122, 181, kOwToday, 1, 230);
+    draw_line(122, 181, 147, 205, kOwToday, 1, 230);
+    draw_line(147, 205, 168, 205, kOwToday, 1, 230);
 
-        const int row = i / 12;
-        const int col = i % 12;
-        const int x = bucket_x + col * (bucket_w + bucket_gap);
-        const int y = bucket_y + row * (bucket_h + row_gap);
-        const int fill_h = std::max(4, static_cast<int>(std::lround((bucket_h - 8) * clamp01(activity))));
-        const int fill_y = y + bucket_h - 4 - fill_h;
+    lv_area_t today_dot = {
+        static_cast<lv_coord_t>(coords.x1 + 165),
+        static_cast<lv_coord_t>(coords.y1 + 202),
+        static_cast<lv_coord_t>(coords.x1 + 171),
+        static_cast<lv_coord_t>(coords.y1 + 208),
+    };
+    rect.radius = LV_RADIUS_CIRCLE;
+    rect.bg_color = lv_color_hex(kOwToday);
+    rect.bg_opa = 255;
+    rect.border_width = 0;
+    lv_draw_rect(layer, &rect, &today_dot);
+
+    auto draw_divider = [&](int y) {
+        draw_line(44, y, 204, y, 0x314052, 1, 210);
+        draw_line(262, y, 422, y, 0x314052, 1, 210);
+        draw_line(218, y, 227, y, 0x596CFF, 2, 245);
+        draw_line(232, y, 241, y, 0x596CFF, 2, 245);
+        draw_line(246, y, 255, y, 0x596CFF, 2, 245);
+    };
+    draw_divider(222);
+    draw_divider(340);
+
+    constexpr int kCells = 24;
+    constexpr int kCellSize = 24;
+    constexpr int kCellGap = 6;
+    const int cell_x = coords.x1 + 56;
+    const int cell_y = coords.y1 + 263;
+
+    for (int i = 0; i < kCells; ++i) {
+        const float activity = _state.activityBuckets[i];
+        const int col = i / 2;
+        const int row = i % 2;
+        const int x = cell_x + col * (kCellSize + kCellGap);
+        const int y = cell_y + row * (kCellSize + kCellGap);
 
         lv_area_t area = {
             static_cast<lv_coord_t>(x),
             static_cast<lv_coord_t>(y),
-            static_cast<lv_coord_t>(x + bucket_w),
-            static_cast<lv_coord_t>(y + bucket_h),
+            static_cast<lv_coord_t>(x + kCellSize - 1),
+            static_cast<lv_coord_t>(y + kCellSize - 1),
         };
-        rect.radius = 8;
-        rect.bg_color = lv_color_hex(0x142236);
-        rect.bg_opa = 185;
-        rect.border_width = 0;
+        rect.radius = 4;
+        rect.bg_color = lv_color_hex(activity_heat_color(activity));
+        rect.bg_opa = 255;
+        rect.border_width = 1;
+        rect.border_color = lv_color_hex(0x145484);
+        rect.border_opa = 150;
         lv_draw_rect(layer, &rect, &area);
-
-        lv_area_t fill_area = {
-            static_cast<lv_coord_t>(x + 4),
-            static_cast<lv_coord_t>(fill_y),
-            static_cast<lv_coord_t>(x + bucket_w - 4),
-            static_cast<lv_coord_t>(y + bucket_h - 4),
-        };
-        rect.radius = 5;
-        rect.bg_color = lv_color_hex(blend_color(kOwTeal, kOwBlue, static_cast<float>(i) / static_cast<float>(kBars - 1)));
-        rect.bg_opa = 92 + static_cast<lv_opa_t>(activity * 150.0f);
-        lv_draw_rect(layer, &rect, &fill_area);
     }
+
 }
 
 void CodexView::initPet()
@@ -1305,7 +1340,7 @@ void CodexView::initVoiceWaveform()
 {
     _voice_waveform = std::make_unique<Container>(_panel->get());
     _voice_waveform->setSize(188, 42);
-    _voice_waveform->align(LV_ALIGN_TOP_MID, 0, _theme_mode == ThemeMode::OpenWatcherV2 ? 278 : 319);
+    _voice_waveform->align(LV_ALIGN_TOP_MID, 0, _theme_mode == ThemeMode::OpenWatcherV2 ? 354 : 319);
     _voice_waveform->setBgOpa(LV_OPA_TRANSP);
     _voice_waveform->setBorderWidth(0);
     _voice_waveform->setPaddingAll(0);
@@ -1323,9 +1358,7 @@ void CodexView::initVoiceWaveform()
         bar->setBorderWidth(0);
         bar->setBgColor(i % 2 == 0 ? lv_color_hex(kOwBlue) : lv_color_hex(kColorWeek));
         bar->setBgOpa(220);
-        bar->setShadowWidth(8);
-        bar->setShadowColor(lv_color_hex(0x386FFF));
-        bar->setShadowOpa(70);
+        bar->setShadowWidth(0);
         bar->align(LV_ALIGN_TOP_LEFT, kStartX + i * kGap, 16);
         bar->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
         _voice_bars[i] = std::move(bar);
@@ -1356,9 +1389,15 @@ void CodexView::updateVoiceWaveform()
             wave = 0.5f + 0.5f * std::sin((phase * 6.283185f) + static_cast<float>(i) * 0.78f);
         }
         const int height = kMinHeight + static_cast<int>(std::lround((kMaxHeight - kMinHeight) * wave));
+        const int opacity = 150 + static_cast<int>(wave * 90.0f);
+        if (_voice_bar_heights[i] == height && _voice_bar_opacities[i] == opacity) {
+            continue;
+        }
+        _voice_bar_heights[i] = height;
+        _voice_bar_opacities[i] = opacity;
         _voice_bars[i]->setSize(8, height);
         _voice_bars[i]->align(LV_ALIGN_TOP_LEFT, 42 + static_cast<int>(i) * 12, kCenterY - height / 2);
-        _voice_bars[i]->setBgOpa(150 + static_cast<int>(wave * 90.0f));
+        _voice_bars[i]->setBgOpa(opacity);
     }
 }
 
@@ -1430,6 +1469,12 @@ void CodexView::setMessageImage(const void* src, uint32_t ttlMs)
         return;
     }
 
+    if (_theme_mode == ThemeMode::OpenWatcherV2) {
+        _message_image_active = false;
+        _message_image->setHidden(true);
+        return;
+    }
+
     _message_image_active = true;
     _state.messageExpiresAtMs = ttlMs == 0 ? 0 : GetHAL().millis() + ttlMs;
     _message_image->setSrc(src);
@@ -1441,6 +1486,30 @@ void CodexView::setMessageImage(const void* src, uint32_t ttlMs)
 
 void CodexView::setMessageText(const std::string& message)
 {
+    if (_theme_mode == ThemeMode::OpenWatcherV2) {
+        _message_image_active = false;
+        if (_message_image) {
+            _message_image->setHidden(true);
+        }
+        if (message.empty() || message == "Ready") {
+            _state.message.clear();
+            _state.messageExpiresAtMs = 0;
+            if (_message_label) {
+                _message_label->setText("");
+                _message_label->setHidden(true);
+            }
+            return;
+        }
+
+        _state.message = message;
+        _state.messageExpiresAtMs = GetHAL().millis() + 2200;
+        if (_message_label) {
+            _message_label->setText(_state.message.c_str());
+            _message_label->setHidden(_voice_mode != VoiceMode::Idle);
+        }
+        return;
+    }
+
     if (message.empty() || message == "Ready") {
         setIdleMessageImage(++_message_phrase_counter + GetHAL().millis());
         return;

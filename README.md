@@ -1,11 +1,11 @@
 # M5stopwatch-vibecoding
 
-![Version](https://img.shields.io/badge/version-v0.7.0-6f5cff)
+![Version](https://img.shields.io/badge/version-v0.7.3-6f5cff)
 ![Platform](https://img.shields.io/badge/platform-ESP32--S3%20%7C%20macOS-2f81f7)
 
 把 M5Stack StopWatch 变成 Codex、ChatGPT、Claude Code 和 IDE 的桌面状态屏与语音输入控制器。配套 macOS 菜单栏 App 可以把手表麦克风实时接入 Mac，并提供系统可用的 `M5 StopWatch Mic` 输入设备。
 
-当前固件版本是 **v0.7.0**（2026-08-16），配套 macOS Bridge 版本为 **v1.1.2**。查看[固件更新记录](CHANGELOG.md)、[Bridge 更新记录](tools/typeless_bridge/CHANGELOG.md)和[最新下载](https://github.com/liptoxli/M5stopwatch-vibecoding/releases/latest)。
+当前固件版本是 **v0.7.3**（2026-08-16），配套 macOS Bridge 版本为 **v1.1.5**。查看[固件更新记录](CHANGELOG.md)、[Bridge 更新记录](tools/typeless_bridge/CHANGELOG.md)和[最新下载](https://github.com/liptoxli/M5stopwatch-vibecoding/releases/latest)。
 
 ![Codex StopWatch 实机运行效果](docs/assets/codex-stopwatch-ui-actual.jpeg)
 
@@ -53,8 +53,10 @@ docs/                     功能说明、额度机制、宠物替换指南
 
 | 日期 | 固件 | Mac Bridge | 主要更新 |
 | --- | --- | --- | --- |
-| 2026-08-16 | v0.7.0 | v1.1.2 | 虚拟麦音频引擎心跳、静音检测与局部自动恢复 |
-| 2026-08-16 | v0.7.0 | v1.1.1 | 实时 BLE 麦克风、`M5 StopWatch Mic` 驱动和断线自动恢复 |
+| 2026-08-16 | v0.7.3 | v1.1.5 | BLE 保持连接，麦克风改为按需传输；设备 A 键和 Mac Typeless 快捷键都可立即唤醒 |
+| 2026-08-16 | v0.7.2 | v1.1.4 | 第二套 UI 差分刷新和 10 FPS 波形；语音状态不再触发完整额度面板刷新 |
+| 2026-08-16 | v0.7.1 | v1.1.3 | 修复第二套 UI 录音时的 A/B 按键响应和 Typeless 再次录音 |
+| 2026-08-16 | v0.7.0 | v1.1.2 | 实时 BLE 麦克风、虚拟输入、断线恢复和静音局部自恢复 |
 | 2026-08-15 | v0.6.0 | v1.0.3 | 周额度/08:00 日基线、输入配置和 Bridge 稳定性改进 |
 | 2026-06-13 | v0.5.0（界面 V0.5） | v1.0.0-v1.0.2 | Codex 页面、Pet、BLE Bridge、Typeless/微信输入模式和 BLE HID |
 

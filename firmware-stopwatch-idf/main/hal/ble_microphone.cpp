@@ -27,6 +27,13 @@ constexpr std::uint32_t kStreamSampleRate = 16000;
 constexpr std::uint8_t kCodecImaAdpcm = 1;
 constexpr std::size_t kPacketHeaderSize = 14;
 constexpr std::size_t kPacketSize = kPacketHeaderSize + ima_adpcm::kEncodedBytesPerBlock;
+constexpr std::uint32_t kStopTailMs = 400;
+
+enum class StreamMode : std::uint8_t {
+    Disabled = 0,
+    Continuous = 1,
+    Armed = 2,
+};
 
 const ble_uuid128_t kServiceUuid = BLE_UUID128_INIT(
     0x01, 0xb0, 0xa1, 0xf6, 0xc8, 0xa8, 0x42, 0x9f, 0x3c, 0x4f, 0xf1, 0x5c, 0x01, 0x00, 0x2f, 0x7d);
@@ -40,7 +47,10 @@ const ble_uuid128_t kStatsUuid = BLE_UUID128_INIT(
 std::atomic<bool> g_connected = false;
 std::atomic<bool> g_audio_subscribed = false;
 std::atomic<bool> g_stats_subscribed = false;
-std::atomic<bool> g_start_requested = false;
+std::atomic<StreamMode> g_stream_mode = StreamMode::Disabled;
+std::atomic<bool> g_voice_requested = false;
+std::atomic<TickType_t> g_stop_at_tick = 0;
+std::atomic<std::uint32_t> g_stream_generation = 0;
 std::atomic<bool> g_capture_task_started = false;
 std::atomic<bool> g_link_update_task_running = false;
 std::atomic<std::uint8_t> g_link_update_attempts = 0;
@@ -54,7 +64,50 @@ std::uint16_t g_stats_handle = 0;
 std::uint16_t g_sequence = 0;
 std::uint32_t g_sample_index = 0;
 TickType_t g_last_stats_tick = 0;
+TaskHandle_t g_capture_task_handle = nullptr;
 ima_adpcm::Encoder g_encoder;
+
+void wake_capture_task()
+{
+    if (g_capture_task_handle != nullptr) {
+        xTaskNotifyGive(g_capture_task_handle);
+    }
+}
+
+void request_voice_start()
+{
+    if (g_stream_mode.load() != StreamMode::Armed || !g_connected.load() || !g_audio_subscribed.load()) {
+        return;
+    }
+    g_stop_at_tick = 0;
+    if (!g_voice_requested.exchange(true)) {
+        ++g_stream_generation;
+    }
+    wake_capture_task();
+}
+
+void request_voice_stop(bool immediate)
+{
+    if (!g_voice_requested.load()) {
+        return;
+    }
+    if (immediate) {
+        g_stop_at_tick = 0;
+        g_voice_requested = false;
+        wake_capture_task();
+        return;
+    }
+    g_stop_at_tick = xTaskGetTickCount() + pdMS_TO_TICKS(kStopTailMs);
+}
+
+void apply_stop_deadline()
+{
+    const TickType_t deadline = g_stop_at_tick.load();
+    if (deadline != 0 && static_cast<std::int32_t>(xTaskGetTickCount() - deadline) >= 0) {
+        g_stop_at_tick = 0;
+        g_voice_requested = false;
+    }
+}
 
 void put_u16(std::uint8_t* target, std::uint16_t value)
 {
@@ -73,7 +126,7 @@ void put_u32(std::uint8_t* target, std::uint32_t value)
 std::array<std::uint8_t, 20> make_stats()
 {
     std::array<std::uint8_t, 20> stats = {};
-    stats[0] = 2;
+    stats[0] = 3;
     stats[1] = ble_microphone::is_streaming() ? 1 : 0;
     stats[2] = g_audio_subscribed.load() ? 1 : 0;
     put_u32(&stats[4], kStreamSampleRate);
@@ -164,11 +217,23 @@ void capture_task(void*)
 {
     std::vector<std::int16_t> source;
     std::array<std::int16_t, ima_adpcm::kSamplesPerBlock> frame = {};
+    std::uint32_t active_generation = 0;
     while (true) {
+        apply_stop_deadline();
         if (!ble_microphone::is_streaming()) {
             poll_stats();
-            vTaskDelay(pdMS_TO_TICKS(10));
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
             continue;
+        }
+        const std::uint32_t generation = g_stream_generation.load();
+        if (generation != active_generation) {
+            active_generation = generation;
+            g_sequence = 0;
+            g_sample_index = 0;
+            g_encoder.reset();
+            g_packets_sent = 0;
+            g_packets_dropped = 0;
+            g_pcm_bytes_sent = 0;
         }
         GetHAL().audioRecord(source, 20, 30.0f);
         if (source.empty()) {
@@ -225,19 +290,36 @@ int gatt_access(std::uint16_t, std::uint16_t, ble_gatt_access_ctxt* context, voi
         std::uint8_t command = 0;
         std::uint16_t copied = 0;
         const int result = ble_hs_mbuf_to_flat(context->om, &command, sizeof(command), &copied);
-        if (result != 0 || copied != 1 || command > 1) {
+        if (result != 0 || copied != 1 || command > 4) {
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
-        g_start_requested = command == 1;
-        if (command == 1) {
-            g_sequence = 0;
-            g_sample_index = 0;
-            g_encoder.reset();
-            g_packets_sent = 0;
-            g_packets_dropped = 0;
-            g_pcm_bytes_sent = 0;
+        switch (command) {
+        case 0:
+            g_stream_mode = StreamMode::Disabled;
+            request_voice_stop(true);
+            break;
+        case 1:
+            g_stream_mode = StreamMode::Continuous;
+            g_stop_at_tick = 0;
+            g_voice_requested = false;
+            ++g_stream_generation;
+            wake_capture_task();
+            break;
+        case 2:
+            g_stream_mode = StreamMode::Armed;
+            request_voice_stop(true);
+            break;
+        case 3:
+            request_voice_start();
+            break;
+        case 4:
+            request_voice_stop(false);
+            break;
+        default:
+            break;
         }
-        ESP_LOGI(kTag, "control: %s", command == 1 ? "start" : "stop");
+        ESP_LOGI(kTag, "control command=%u streaming=%s", command,
+                 ble_microphone::is_streaming() ? "true" : "false");
         return 0;
     }
     if (ble_uuid_cmp(context->chr->uuid, &kStatsUuid.u) == 0 &&
@@ -283,8 +365,10 @@ void start_capture_task()
     if (!g_capture_task_started.compare_exchange_strong(expected, true)) {
         return;
     }
-    if (xTaskCreatePinnedToCore(capture_task, "ble_mic_capture", 8192, nullptr, 8, nullptr, 1) != pdPASS) {
+    if (xTaskCreatePinnedToCore(capture_task, "ble_mic_capture", 8192, nullptr, 8,
+                                &g_capture_task_handle, 1) != pdPASS) {
         g_capture_task_started = false;
+        g_capture_task_handle = nullptr;
         ESP_LOGE(kTag, "failed to create capture task");
     }
 }
@@ -308,8 +392,11 @@ void on_disconnected()
     g_connected = false;
     g_audio_subscribed = false;
     g_stats_subscribed = false;
-    g_start_requested = false;
+    g_stream_mode = StreamMode::Disabled;
+    g_voice_requested = false;
+    g_stop_at_tick = 0;
     g_connection_handle = BLE_HS_CONN_HANDLE_NONE;
+    wake_capture_task();
 }
 
 void on_gap_event(const ble_gap_event& event)
@@ -336,7 +423,21 @@ void on_gap_event(const ble_gap_event& event)
 
 bool is_streaming()
 {
-    return g_connected.load() && g_audio_subscribed.load() && g_start_requested.load();
+    if (!g_connected.load() || !g_audio_subscribed.load()) {
+        return false;
+    }
+    const StreamMode mode = g_stream_mode.load();
+    return mode == StreamMode::Continuous || (mode == StreamMode::Armed && g_voice_requested.load());
+}
+
+void begin_voice_input()
+{
+    request_voice_start();
+}
+
+void end_voice_input()
+{
+    request_voice_stop(false);
 }
 
 }  // namespace ble_microphone
