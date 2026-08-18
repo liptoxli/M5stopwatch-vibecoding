@@ -195,6 +195,9 @@ public:
     void setSpeakerVolume(int volume, bool saveToSettings = false);
     int getSpeakerVolume(bool loadFromSettings = false);
     int getAudioSampleRate();
+    bool acquireAudioInput();
+    void releaseAudioInput();
+    bool isAudioInputActive();
     void audioRecord(std::vector<int16_t>& data, uint16_t durationMs, float gain = 30.0f);
     void audioPlay(std::vector<int16_t>& data, bool async = true);
 
@@ -278,6 +281,7 @@ private:
 
     i2c_bus_handle_t _i2c_bus = nullptr;
     ImuData _imu_data;
+    std::uint32_t _imu_last_update_ms = 0;
     ButtonConfig _btn_config;
     AudioSpectrumFrame _audio_spectrum;
     bool _bluetooth_enabled = false;

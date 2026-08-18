@@ -4,6 +4,66 @@
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-18
+
+### Added
+
+- OpenWatcher V2 标题新增 Codex 未读任务状态：无未读显示 `Codex Clear`，1/2/3+ 个未读分别使用黄、橙、红色提醒。
+- macOS Bridge 从本机 Codex 状态读取未读任务，并过滤已经归档的本地任务；仅在数量变化时通过现有 BLE 写入队列同步。
+- 新增滚动四小时活动热力图：24 个方格每格代表 10 分钟，按照真实录音时长和录音启动频率计算使用强度。
+- 新增完整的真实续航测试记录，并在项目首页公开测试边界、实际开机时间和低电量显示限制。
+
+### Changed
+
+- 活动方格改为按时间顺序排列：上排是较早的两小时，下排是最近两小时，均从左向右推进。
+- 活动强度改为六级蓝青色阶，空闲、轻度、中度和重度使用之间更容易区分。
+- 空闲、处理中和额度同步不再放大活动强度；热力图只表达设备端实际语音使用和少量实体交互。
+- 重写 GitHub 项目首页，统一展示项目现状、两套 UI、使用方式、续航、隐私和许可证。
+- macOS Bridge 更新为 v1.2.0。
+
+### Verified
+
+- 固件完成 ESP-IDF 构建、USB 刷写和实机启动验收。
+- BLE 加密连接、Bridge 配置、未读数量、额度面板和虚拟麦克风待命状态均通过日志确认。
+- 实际使用中完成 Typeless 语音输入与长内容录入，未发现新的断线或按键问题。
+
+## [0.8.1] - 2026-08-17
+
+### Changed
+
+- BLE 连接恢复为已长期验证的固定 15ms 间隔，不再在空闲和录音之间动态切换连接参数。
+- 麦克风启动和 Codec 唤醒移出 BLE GATT 回调，改由独立音频任务异步执行，避免阻塞 ATT 响应。
+- 首次录音后保持 Codec 热启动；空闲时关闭输入并释放 240MHz 性能锁，再次按 A 可以快速开始录音。
+- macOS Bridge 更新为 v1.1.8：麦克风控制、状态和额度面板写入按优先级串行发送，面板分片等待每次写入确认后再继续。
+- Bridge 主安装脚本同步安装 60 秒进程守护；异常退出后自动重新启动菜单栏 App。
+
+### Fixed
+
+- 修复 v0.8.0 中长时间 ATT 响应超时、录音流停顿并最终被 macOS 强制断开的问题。
+- 修复额度面板分片、状态同步和麦克风控制并发写入时放大 BLE 拥塞的问题。
+
+### Compatibility
+
+- 保留两套 UI、实体按键、振动、提示音、BLE HID、Typeless 虚拟麦克风、省电降频、息屏和自动关机机制；不修改音频数据格式或虚拟麦克风驱动。
+
+## [0.8.0] - 2026-08-16
+
+### Changed
+
+- 修正最终 ESP-IDF 配置，让 CPU 动态电源管理真正生效；正常界面保持 160MHz 基线，录音和 FFT 持有 240MHz 性能锁，变暗和息屏时回到 80MHz。
+- 空闲时挂起 ES8311 Codec 和 I2S 数据通道；A 键开始录音时先同步唤醒音频并保留 20ms 稳定时间，停止后仍保留原有 400ms 尾段。
+- BLE 在空闲连接时使用 30ms 间隔，录音时切回 15ms；不断开、不重新配对，并保留参数更新重试。
+- 主循环降低固定唤醒频率，LVGL 改用自适应定时并在 activity sleep 停止 tick timer。
+- 全局 IMU 读取增加 50ms 共享采样窗口，避免 Codex 页面和活动检测重复访问同一批数据。
+- 电池审计新增 80/160/240MHz 频率驻留、音频输入占比和息屏占比；重新插电后延迟重复输出结果，方便手动接入串口查看。
+- 补齐公开构建默认配置中的 Montserrat 48 字体，确保第二套 UI 从干净仓库直接编译。
+- 第二套 UI 的 24 个活动方格从最近 2 小时调整为最近 4 小时，每格代表 10 分钟；左侧状态改为周额度刷新倒计时。
+
+### Compatibility
+
+- 保留两套 UI、A/B 实体按键、振动、提示音、摇一摇、BLE HID、Codex 额度、Typeless 虚拟麦克风和 15 分钟 PMIC 关机机制。
+- macOS Bridge 更新为 v1.1.7，仅扩展活动统计窗口；未改动 BLE 音频协议或虚拟麦克风驱动。
+
 ## [0.7.4] - 2026-08-16
 
 ### Changed
@@ -111,7 +171,10 @@
 - 新增 Typeless/微信输入法输入模式、A/B 键绑定、摇晃清除和 BLE HID 输入。
 - 新增 Codex 额度 BLE 推送、隐私与安全说明、功能说明和 Pet 替换文档。
 
-[Unreleased]: https://github.com/liptoxli/M5stopwatch-vibecoding/compare/v0.7.4...HEAD
+[Unreleased]: https://github.com/liptoxli/M5stopwatch-vibecoding/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.9.0
+[0.8.1]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v0.8.1
+[0.8.0]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v0.8.0
 [0.7.4]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v0.7.4
 [0.7.3]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v0.7.3
 [0.7.2]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v0.7.2

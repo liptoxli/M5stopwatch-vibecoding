@@ -9,8 +9,8 @@ MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 BIN="$MACOS_DIR/stopwatch-ble-bridge"
 PLIST="$HOME/Library/LaunchAgents/dev.vibecoding.stopwatch-ble-bridge.plist"
-WATCHDOG_PLIST="$HOME/Library/LaunchAgents/dev.vibecoding.stopwatch-ble-bridge.watchdog.plist"
-WATCHDOG="$HOME/Library/Application Support/M5StopWatch/StopWatchBleBridge/watchdog.sh"
+WATCHDOG_PLIST="$HOME/Library/LaunchAgents/com.liptox.stopwatch-ble-bridge.watchdog.plist"
+WATCHDOG="$HOME/Library/Application Support/Liptox/StopWatchBleBridge/watchdog.sh"
 LOG="$HOME/Library/Logs/stopwatch-ble-bridge.log"
 SIGN_IDENTITY="${BRIDGE_CODESIGN_IDENTITY:-M5StopWatch Local Code Signing}"
 BRIDGE_VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/VERSION")"
@@ -111,4 +111,6 @@ cat > "$PLIST" <<PLIST
 PLIST
 
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
+"$SCRIPT_DIR/install_watchdog_only.sh" >/dev/null
 echo "$PLIST"
+echo "$WATCHDOG_PLIST"

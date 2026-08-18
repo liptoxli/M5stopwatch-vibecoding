@@ -14,6 +14,7 @@
 #include <esp_dsp.h>
 #include <esp_codec_dev.h>
 #include <esp_codec_dev_defaults.h>
+#include <esp_pm.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <mutex>
@@ -84,7 +85,76 @@ public:
             .channel         = 1,
             .sample_rate     = sample_rate,
         };
-        esp_codec_dev_open(_codec_dev, &fs);
+        _sample_info = fs;
+        _codec_open = esp_codec_dev_open(_codec_dev, &_sample_info) == ESP_CODEC_DEV_OK;
+        if (!_codec_open) {
+            mclog::tagError(_tag, "codec open failed");
+        }
+#if CONFIG_PM_ENABLE
+        const esp_err_t lock_ret = esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX, 0, "audio_input", &_input_cpu_lock);
+        if (lock_ret != ESP_OK) {
+            mclog::tagWarn(_tag, "audio CPU lock create failed: {}", esp_err_to_name(lock_ret));
+        }
+#endif
+    }
+
+    bool acquireInput()
+    {
+        if (!_input_enabled) {
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(_mutex);
+        if (!_ensure_codec_open_locked()) {
+            return false;
+        }
+        if (_input_clients == 0) {
+            // Once voice input has been used, keep the Codec/I2S device open
+            // for the rest of this boot. Muting and releasing the CPU lock
+            // provides most of the idle saving without repeatedly exercising
+            // the unstable close/open path between dictation sessions.
+            _keep_codec_warm = true;
+#if CONFIG_PM_ENABLE
+            if (_input_cpu_lock != nullptr) {
+                esp_pm_lock_acquire(_input_cpu_lock);
+            }
+#endif
+            esp_codec_dev_set_in_mute(_codec_dev, false);
+            // Let MCLK and the ADC path settle before the first captured frame.
+            vTaskDelay(pdMS_TO_TICKS(20));
+            mclog::tagInfo(_tag, "audio input active");
+        }
+        ++_input_clients;
+        return true;
+    }
+
+    void releaseInput()
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        if (_input_clients == 0) {
+            return;
+        }
+        --_input_clients;
+        if (_input_clients == 0) {
+            esp_codec_dev_set_in_mute(_codec_dev, true);
+#if CONFIG_PM_ENABLE
+            if (_input_cpu_lock != nullptr) {
+                esp_pm_lock_release(_input_cpu_lock);
+            }
+#endif
+            mclog::tagInfo(_tag, "audio input idle");
+        }
+    }
+
+    bool isInputActive()
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        return _input_clients > 0 && _codec_open;
+    }
+
+    void suspendIfIdle()
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _close_codec_if_idle_locked();
     }
 
     void updateSpectrum(Hal::AudioSpectrumFrame& frame)
@@ -111,15 +181,17 @@ public:
     void setVolume(int volume)
     {
         std::lock_guard<std::mutex> lock(_mutex);
-        esp_codec_dev_set_out_vol(_codec_dev, volume);
+        _cached_volume = volume;
+        if (_ensure_codec_open_locked()) {
+            esp_codec_dev_set_out_vol(_codec_dev, volume);
+            _close_codec_if_idle_locked();
+        }
     }
 
     int getVolume()
     {
         std::lock_guard<std::mutex> lock(_mutex);
-        int volume = 0;
-        esp_codec_dev_get_out_vol(_codec_dev, &volume);
-        return volume;
+        return _cached_volume;
     }
 
     void setMicGain(float gain)
@@ -128,12 +200,17 @@ public:
             return;
         }
         std::lock_guard<std::mutex> lock(_mutex);
-        esp_codec_dev_set_in_gain(_codec_dev, gain);
+        if (_ensure_codec_open_locked()) {
+            esp_codec_dev_set_in_gain(_codec_dev, gain);
+        }
     }
 
     void play(std::vector<int16_t>& data, bool async)
     {
         std::lock_guard<std::mutex> lock(_mutex);
+        if (!_ensure_codec_open_locked()) {
+            return;
+        }
         if (async) {
             // Support interruption: overwrite data and notify task
             _audio_data = data;
@@ -155,6 +232,12 @@ public:
             return;
         }
         std::lock_guard<std::mutex> lock(_mutex);
+
+        if (_input_clients == 0 || !_codec_open) {
+            mclog::tagWarn(_tag, "record requested while audio input is idle");
+            data.clear();
+            return;
+        }
 
         esp_codec_dev_set_in_gain(_codec_dev, gain);
 
@@ -186,6 +269,7 @@ private:
                     std::lock_guard<std::mutex> lock(_mutex);
                     if (_audio_data.empty()) {
                         _is_playing = false;
+                        _close_codec_if_idle_locked();
                         break;
                     }
                     current_data = _audio_data;
@@ -256,6 +340,34 @@ private:
         }
         _speaker_amp_enabled = enabled;
         GetHAL().ioe_speaker_enable(enabled);
+    }
+
+    bool _ensure_codec_open_locked()
+    {
+        if (_codec_open) {
+            return true;
+        }
+        const int ret = esp_codec_dev_open(_codec_dev, &_sample_info);
+        if (ret != ESP_CODEC_DEV_OK) {
+            mclog::tagError(_tag, "codec resume failed: {}", ret);
+            return false;
+        }
+        _codec_open = true;
+        return true;
+    }
+
+    void _close_codec_if_idle_locked()
+    {
+        if (!_codec_open || _keep_codec_warm || _input_clients != 0 || _is_playing || !_audio_data.empty()) {
+            return;
+        }
+        const int ret = esp_codec_dev_close(_codec_dev);
+        if (ret == ESP_CODEC_DEV_OK) {
+            _codec_open = false;
+            mclog::tagInfo(_tag, "codec suspended");
+        } else {
+            mclog::tagWarn(_tag, "codec suspend failed: {}", ret);
+        }
     }
 
     void _i2s_init(bool enableInput)
@@ -473,8 +585,16 @@ private:
     float _spectrum_normalization_level                                            = 0.03f;
     bool _spectrum_available                                                       = false;
     bool _input_enabled                                                            = false;
+    bool _codec_open                                                               = false;
+    bool _keep_codec_warm                                                          = false;
     bool _is_playing                                                               = false;
     bool _speaker_amp_enabled                                                      = false;
+    uint16_t _input_clients                                                        = 0;
+    int _cached_volume                                                             = 80;
+    esp_codec_dev_sample_info_t _sample_info                                       = {};
+#if CONFIG_PM_ENABLE
+    esp_pm_lock_handle_t _input_cpu_lock                                            = nullptr;
+#endif
 } _audio_codec;
 
 void Hal::audio_init()
@@ -492,6 +612,7 @@ void Hal::audio_init()
     // Load volume from settings
     setSpeakerVolume(getSpeakerVolume(true), false);
     ioe_speaker_enable(false);
+    _audio_codec.suspendIfIdle();
 }
 
 void Hal::setSpeakerVolume(int volume, bool saveToSettings)
@@ -545,6 +666,23 @@ void Hal::audioPlay(std::vector<int16_t>& data, bool async)
 int Hal::getAudioSampleRate()
 {
     return _audio_codec.sample_rate;
+}
+
+bool Hal::acquireAudioInput()
+{
+    return codex_config::kEnableAudioInput && _audio_codec.acquireInput();
+}
+
+void Hal::releaseAudioInput()
+{
+    if (codex_config::kEnableAudioInput) {
+        _audio_codec.releaseInput();
+    }
+}
+
+bool Hal::isAudioInputActive()
+{
+    return codex_config::kEnableAudioInput && _audio_codec.isInputActive();
 }
 
 void Hal::updateAudioSpectrum()

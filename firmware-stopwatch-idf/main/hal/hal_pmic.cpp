@@ -13,6 +13,7 @@
 #include <array>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <esp_private/esp_clk.h>
 
 static const std::string_view _tag = "HAL-PMIC";
 static std::unique_ptr<M5PM1> _pm1;
@@ -58,6 +59,20 @@ std::size_t _bat_audit_count = 0;
 TickType_t _bat_audit_start_tick = 0;
 TickType_t _bat_audit_last_sample_tick = 0;
 bool _bat_audit_on_battery = false;
+TickType_t _bat_audit_summary_due_tick = 0;
+uint8_t _bat_audit_summary_repeats_remaining = 0;
+
+struct PowerResidency {
+    uint32_t total_samples = 0;
+    uint32_t cpu_80_samples = 0;
+    uint32_t cpu_160_samples = 0;
+    uint32_t cpu_240_samples = 0;
+    uint32_t cpu_other_samples = 0;
+    uint32_t audio_input_samples = 0;
+    uint32_t display_sleep_samples = 0;
+};
+
+PowerResidency _power_residency;
 
 void update_bat_level(uint8_t level)
 {
@@ -89,6 +104,30 @@ void reset_battery_audit(TickType_t now_tick)
     _bat_audit_count = 0;
     _bat_audit_start_tick = now_tick;
     _bat_audit_last_sample_tick = 0;
+    _power_residency = {};
+    _bat_audit_summary_repeats_remaining = 0;
+    _bat_audit_summary_due_tick = 0;
+}
+
+void sample_power_residency()
+{
+    ++_power_residency.total_samples;
+    const int cpu_mhz = esp_clk_cpu_freq() / 1000000;
+    if (cpu_mhz <= 80) {
+        ++_power_residency.cpu_80_samples;
+    } else if (cpu_mhz <= 160) {
+        ++_power_residency.cpu_160_samples;
+    } else if (cpu_mhz <= 240) {
+        ++_power_residency.cpu_240_samples;
+    } else {
+        ++_power_residency.cpu_other_samples;
+    }
+    if (GetHAL().isAudioInputActive()) {
+        ++_power_residency.audio_input_samples;
+    }
+    if (GetHAL().isActivitySleeping()) {
+        ++_power_residency.display_sleep_samples;
+    }
 }
 
 void append_battery_audit_sample(TickType_t now_tick, uint16_t battery_mv)
@@ -134,6 +173,18 @@ void log_battery_audit_summary()
                    "(delta={}%, {:.1f}%/h)",
                    _bat_audit_count, elapsed_ms / 1000, first.battery_mv, last.battery_mv, mv_delta, mv_per_hour,
                    first.battery_percent, last.battery_percent, percent_delta, percent_per_hour);
+
+    const float residency_total = static_cast<float>(std::max<uint32_t>(_power_residency.total_samples, 1));
+    mclog::tagInfo(_tag,
+                   "power residency: samples={}, cpu 80={}%, 160={}%, 240={}%, other={}%, audio_input={}%, "
+                   "display_sleep={}%",
+                   _power_residency.total_samples,
+                   static_cast<int>(100.0f * _power_residency.cpu_80_samples / residency_total),
+                   static_cast<int>(100.0f * _power_residency.cpu_160_samples / residency_total),
+                   static_cast<int>(100.0f * _power_residency.cpu_240_samples / residency_total),
+                   static_cast<int>(100.0f * _power_residency.cpu_other_samples / residency_total),
+                   static_cast<int>(100.0f * _power_residency.audio_input_samples / residency_total),
+                   static_cast<int>(100.0f * _power_residency.display_sleep_samples / residency_total));
 }
 
 void bat_reading_task(void* param)
@@ -160,9 +211,21 @@ void bat_reading_task(void* param)
                     append_battery_audit_sample(now_tick, battery_mv);
                 } else if (!on_battery && _bat_audit_on_battery) {
                     append_battery_audit_sample(now_tick, battery_mv);
-                    log_battery_audit_summary();
+                    // USB serial enumerates after external power is inserted.
+                    // Repeat the in-RAM summary after a short delay so a manual
+                    // monitor can attach without writing audit data to flash.
+                    _bat_audit_summary_due_tick = now_tick + pdMS_TO_TICKS(5000);
+                    _bat_audit_summary_repeats_remaining = 2;
                 }
                 _bat_audit_on_battery = on_battery;
+                if (on_battery) {
+                    sample_power_residency();
+                } else if (_bat_audit_summary_repeats_remaining > 0 &&
+                           static_cast<int32_t>(now_tick - _bat_audit_summary_due_tick) >= 0) {
+                    log_battery_audit_summary();
+                    --_bat_audit_summary_repeats_remaining;
+                    _bat_audit_summary_due_tick = now_tick + pdMS_TO_TICKS(20000);
+                }
             }
         }
 

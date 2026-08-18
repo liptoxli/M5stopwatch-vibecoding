@@ -160,6 +160,9 @@ bool g_host_voice_valid = false;
 bool g_host_voice_active = false;
 ble_bridge::VoicePhase g_host_voice_phase = ble_bridge::VoicePhase::Idle;
 uint32_t g_host_voice_sequence = 0;
+bool g_host_codex_unread_valid = false;
+int g_host_codex_unread_count = 0;
+uint32_t g_host_codex_unread_sequence = 0;
 TickType_t g_companion_ready_tick = 0;
 bool g_host_panel_valid = false;
 std::string g_host_panel_json;
@@ -590,6 +593,17 @@ void apply_voice_payload(const std::string& payload)
     }
 
     mark_companion_ready();
+    if (json_string_field(payload, "type") == "codex_unread") {
+        const int unread_count = std::clamp(json_int_field(payload, "count", 0), 0, 999);
+        const bool changed = !g_host_codex_unread_valid || unread_count != g_host_codex_unread_count;
+        g_host_codex_unread_valid = true;
+        g_host_codex_unread_count = unread_count;
+        if (changed) {
+            ++g_host_codex_unread_sequence;
+            ESP_LOGI(kTag, "Codex unread state updated: count=%d", unread_count);
+        }
+        return;
+    }
     if (contains_any(lower, {"\"input_mode\":", "\"primary_key\":", "\"confirm_key\":", "\"confirm_long_action\":", "\"shake_action\":"})) {
         ESP_LOGI(kTag, "bridge config payload: %s", payload.c_str());
         if (contains_any(lower, {"\"input_mode\":\"wechat_ime\"", "\"input_mode\":\"wechat\"", "\"mode\":\"wechat_ime\""})) {
@@ -1462,6 +1476,21 @@ VoicePhase host_voice_phase()
 uint32_t host_voice_sequence()
 {
     return g_host_voice_sequence;
+}
+
+bool host_codex_unread_valid()
+{
+    return g_host_codex_unread_valid;
+}
+
+int host_codex_unread_count()
+{
+    return g_host_codex_unread_count;
+}
+
+uint32_t host_codex_unread_sequence()
+{
+    return g_host_codex_unread_sequence;
 }
 
 bool host_panel_valid()

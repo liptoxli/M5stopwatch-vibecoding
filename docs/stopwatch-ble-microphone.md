@@ -1,6 +1,6 @@
 # StopWatch BLE microphone protocol
 
-Status: implemented in firmware v0.7.0 and StopWatch BLE Bridge v1.1.2.
+Status: introduced in firmware v0.7.0 and validated with the current firmware v0.9.0 / StopWatch BLE Bridge v1.2.0.
 
 The microphone is an additive service on the same bonded BLE connection used
 by HID and the existing Bridge service. It does not replace the full StopWatch
@@ -47,8 +47,10 @@ continuous.
 
 ## Runtime behavior
 
-Virtual microphone mode defaults to off. The Mac menu starts the local Core
-Audio output before subscribing and then sends `Start`. Disabling the menu
-sends `Stop`, unsubscribes, stops Core Audio, and restores the previous macOS
-default input. This is a continuous real-time stream; no WAV file is created
-and no start/stop recording is uploaded asynchronously.
+Virtual microphone mode defaults to off. When enabled, the Mac keeps the local
+Core Audio virtual input and BLE subscription ready, but the device does not
+continuously capture audio. Starting voice input sends `Start`; ending voice
+input sends `Stop` after a short tail. Disabling the menu also unsubscribes,
+stops Core Audio, and restores the previous macOS default input. The active
+audio path is a real-time stream; no WAV file is created and no recording is
+uploaded asynchronously.

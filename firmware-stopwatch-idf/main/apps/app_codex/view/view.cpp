@@ -38,6 +38,8 @@ constexpr uint32_t kOwAmber      = 0xFFC542;
 constexpr uint32_t kOwTeal       = 0x2DF1D3;
 constexpr uint32_t kOwSoftText   = 0xADB9CC;
 constexpr uint32_t kOwTrack      = 0x1E2A3C;
+constexpr uint32_t kOwStatusIdle = 0x7895B2;
+constexpr uint32_t kOwAlert      = 0xFF405C;
 constexpr uint32_t kPetTouchEffectMs = 1050;
 constexpr uint32_t kPetIdleFrameMs = 50;
 constexpr uint32_t kPetActiveFrameMs = 33;
@@ -184,14 +186,20 @@ uint32_t activity_heat_color(float activity)
     if (value <= 0.001f) {
         return 0x142236;
     }
-    if (value < 0.25f) {
+    if (value < 0.10f) {
         return 0x18364A;
     }
-    if (value < 0.50f) {
+    if (value < 0.25f) {
+        return 0x174B63;
+    }
+    if (value < 0.45f) {
         return 0x176078;
     }
-    if (value < 0.75f) {
+    if (value < 0.65f) {
         return 0x1591A2;
+    }
+    if (value < 0.82f) {
+        return 0x18B7B6;
     }
     return kOwTeal;
 }
@@ -526,6 +534,15 @@ void CodexView::applyBleState(bool connected, const std::string& hostMessage, bo
             return;
         }
         setMessageText(message);
+    }
+}
+
+void CodexView::setUnreadTaskCount(int count)
+{
+    _state.unreadStateValid = true;
+    _state.unreadTaskCount = std::max(count, 0);
+    if (_theme_mode == ThemeMode::OpenWatcherV2) {
+        updateOpenWatcherV2Labels();
     }
 }
 
@@ -955,7 +972,28 @@ void CodexView::updateOpenWatcherV2Labels()
 
     const int week_pct = static_cast<int>(std::lround(remainingRatio(_state.weekly) * 100.0f));
     if (_v2_title_label) {
-        setLabelTextIfChanged(*_v2_title_label, _state.sessionTitle);
+        std::string title = _state.sessionTitle;
+        uint32_t color = kOwStatusIdle;
+        if (_state.unreadStateValid) {
+            if (_state.unreadTaskCount <= 0) {
+                title = "Codex Clear";
+                color = kOwBlue;
+            } else {
+                const std::string count = _state.unreadTaskCount > 9
+                                              ? "9+"
+                                              : std::to_string(_state.unreadTaskCount);
+                title = "Codex " + count + " Unread";
+                if (_state.unreadTaskCount == 1) {
+                    color = kOwAmber;
+                } else if (_state.unreadTaskCount == 2) {
+                    color = kOwToday;
+                } else {
+                    color = kOwAlert;
+                }
+            }
+        }
+        setLabelTextIfChanged(*_v2_title_label, title);
+        _v2_title_label->setTextColor(lv_color_hex(color));
     }
     if (_v2_remaining_value_label) {
         const std::string remaining = std::to_string(week_pct);
@@ -986,11 +1024,12 @@ void CodexView::updateOpenWatcherV2Labels()
         setHiddenIfChanged(*_v2_status_label, !show_status);
     }
     if (_v2_meta_left_label) {
-        const std::string meta = _state.modelLabel + " / " + _state.reasoningLabel;
+        const std::string reset = _state.weekly.resetInLabel.empty() ? "--" : _state.weekly.resetInLabel;
+        const std::string meta = "RESET " + reset;
         setLabelTextIfChanged(*_v2_meta_left_label, meta);
     }
     if (_v2_meta_right_label) {
-        const std::string activity = _state.activityLive ? "LIVE -> NOW" : "2H -> NOW";
+        const std::string activity = "4H -> NOW";
         const char* current = _v2_meta_right_label->getText();
         if (current == nullptr || std::string_view(current) != activity) {
             _v2_meta_right_label->setText(activity.c_str());
@@ -1111,8 +1150,8 @@ void CodexView::drawOpenWatcherV2(lv_layer_t* layer, const lv_area_t& coords)
 
     for (int i = 0; i < kCells; ++i) {
         const float activity = _state.activityBuckets[i];
-        const int col = i / 2;
-        const int row = i % 2;
+        const int col = i % 12;
+        const int row = i / 12;
         const int x = cell_x + col * (kCellSize + kCellGap);
         const int y = cell_y + row * (kCellSize + kCellGap);
 

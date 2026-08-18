@@ -18,6 +18,11 @@ private let supportDirectoryURL = FileManager.default.homeDirectoryForCurrentUse
     .appendingPathComponent("Library/Application Support/M5StopWatch/StopWatchBleBridge")
 private let configFileURL = supportDirectoryURL.appendingPathComponent("config.json")
 private let quotaDailyStateFileURL = supportDirectoryURL.appendingPathComponent("codex-weekly-daily.json")
+private let activityHistoryFileURL = supportDirectoryURL.appendingPathComponent("activity-history.json")
+private let codexGlobalStateFileURL = FileManager.default.homeDirectoryForCurrentUser
+    .appendingPathComponent(".codex/.codex-global-state.json")
+private let codexStateDatabaseURL = FileManager.default.homeDirectoryForCurrentUser
+    .appendingPathComponent(".codex/state_5.sqlite")
 private let logFileURL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Logs/stopwatch-ble-bridge.log")
 private let bridgeSettingsChangedNotification = Notification.Name("StopWatchBleBridgeSettingsChanged")
@@ -29,6 +34,77 @@ private let microphoneStreamFaultSeconds: TimeInterval = 1.2
 private let microphoneStreamStartGraceSeconds: TimeInterval = 1.5
 private let microphoneFatalPacketGap: UInt64 = 25
 private let microphoneFatalDroppedFrames: UInt32 = 25
+
+private func isSafeCodexThreadID(_ id: String) -> Bool {
+    guard id.count == 36 else { return false }
+    let allowed = CharacterSet(charactersIn: "0123456789abcdefABCDEF-")
+    return id.rangeOfCharacter(from: allowed.inverted) == nil
+}
+
+private func effectiveLocalCodexUnreadCount(_ ids: Set<String>) -> Int {
+    let safeIDs = ids.filter(isSafeCodexThreadID)
+    guard !safeIDs.isEmpty else { return 0 }
+    guard FileManager.default.fileExists(atPath: codexStateDatabaseURL.path) else {
+        return safeIDs.count
+    }
+
+    let quoted = safeIDs.sorted().map { "'\($0)'" }.joined(separator: ",")
+    let query = "SELECT id, archived FROM threads WHERE id IN (\(quoted));"
+    let process = Process()
+    let output = Pipe()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+    process.arguments = ["-separator", "\t", codexStateDatabaseURL.path, query]
+    process.standardOutput = output
+    process.standardError = Pipe()
+
+    do {
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0,
+              let text = String(data: data, encoding: .utf8) else {
+            return safeIDs.count
+        }
+
+        var knownIDs = Set<String>()
+        var activeCount = 0
+        for line in text.split(separator: "\n") {
+            let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
+            guard fields.count == 2 else { continue }
+            let id = String(fields[0])
+            knownIDs.insert(id)
+            if fields[1] == "0" {
+                activeCount += 1
+            }
+        }
+        // A brand-new completion can reach the UI state just before its SQLite
+        // row is visible. Treat an unknown ID as unread for that short window.
+        return activeCount + safeIDs.subtracting(knownIDs).count
+    } catch {
+        return safeIDs.count
+    }
+}
+
+private func currentCodexUnreadTaskCount() -> Int? {
+    guard let data = try? Data(contentsOf: codexGlobalStateFileURL),
+          let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let persisted = root["electron-persisted-atom-state"] as? [String: Any],
+          let unreadByHost = persisted["unread-thread-ids-by-host-v1"] as? [String: Any] else {
+        return nil
+    }
+
+    var localIDs = Set<String>()
+    var remoteIDs = Set<String>()
+    for (host, value) in unreadByHost {
+        guard let ids = value as? [String] else { continue }
+        if host == "local" {
+            localIDs.formUnion(ids)
+        } else {
+            remoteIDs.formUnion(ids)
+        }
+    }
+    return effectiveLocalCodexUnreadCount(localIDs) + remoteIDs.count
+}
 
 private enum MicrophoneControlCommand: UInt8 {
     case disable = 0
@@ -382,35 +458,145 @@ private final class BridgeStatusCenter {
 private final class OpenWatcherHomeActivityTracker {
     static let shared = OpenWatcherHomeActivityTracker()
 
-    private var events: [(date: Date, weight: Double, kind: String)] = []
-    private let lock = NSLock()
+    private static let activityWindowSeconds: TimeInterval = 4 * 60 * 60
+    private static let recordingStartTargetPerBucket = 4.0
 
-    func record(_ kind: String, weight: Double = 1.0) {
-        lock.lock()
-        events.append((Date(), max(0.05, min(1.0, weight)), kind))
-        let cutoff = Date().addingTimeInterval(-2 * 60 * 60)
-        events.removeAll { $0.date < cutoff }
-        lock.unlock()
+    private struct RecordingInterval: Codable {
+        var start: Date
+        var end: Date
     }
 
-    func buckets(count: Int = 24, windowSeconds: TimeInterval = 2 * 60 * 60) -> [Double] {
+    private struct InteractionEvent: Codable {
+        var date: Date
+        var units: Double
+    }
+
+    private struct StoredHistory: Codable {
+        var intervals: [RecordingInterval]
+        var interactions: [InteractionEvent]
+    }
+
+    private var intervals: [RecordingInterval] = []
+    private var interactions: [InteractionEvent] = []
+    private var recordingStartedAt: Date?
+    private var currentPhase = "idle"
+    private let lock = NSLock()
+
+    private init() {
+        loadHistory()
+    }
+
+    func record(_ kind: String, weight: Double = 1.0) {
+        let now = Date()
+        lock.lock()
+        var changed = false
+
+        if kind == "recording" {
+            if currentPhase != "recording" {
+                recordingStartedAt = now
+                currentPhase = "recording"
+                changed = true
+            }
+        } else if kind == "processing" || kind == "idle" || kind == "error" {
+            if currentPhase == "recording", let start = recordingStartedAt, now > start {
+                intervals.append(RecordingInterval(start: start, end: now))
+                changed = true
+            }
+            recordingStartedAt = nil
+            currentPhase = kind
+        } else {
+            let units: Double
+            switch kind {
+            case "primary_down": units = 0.25
+            case "enter", "shake": units = 0.15
+            default: units = 0.0
+            }
+            if units > 0 {
+                interactions.append(InteractionEvent(date: now,
+                                                     units: units * max(0.05, min(1.0, weight))))
+                changed = true
+            }
+        }
+
+        pruneLocked(now: now)
+        let history = changed ? StoredHistory(intervals: intervals, interactions: interactions) : nil
+        lock.unlock()
+
+        if let history {
+            saveHistory(history)
+        }
+    }
+
+    func buckets(count: Int = 24, windowSeconds: TimeInterval = activityWindowSeconds) -> [Double] {
         let now = Date()
         let bucketSeconds = windowSeconds / Double(count)
         var result = Array(repeating: 0.0, count: count)
 
         lock.lock()
-        let snapshot = events
+        var intervalSnapshot = intervals
+        if let start = recordingStartedAt, now > start {
+            intervalSnapshot.append(RecordingInterval(start: start, end: now))
+        }
+        let interactionSnapshot = interactions
         lock.unlock()
 
-        for event in snapshot {
-            let age = now.timeIntervalSince(event.date)
-            guard age >= 0, age < windowSeconds else { continue }
-            let reverseIndex = Int(age / bucketSeconds)
-            let index = count - 1 - reverseIndex
-            guard index >= 0, index < count else { continue }
-            result[index] = min(1.0, result[index] + event.weight)
+        let windowStart = now.addingTimeInterval(-windowSeconds)
+        for index in 0..<count {
+            let bucketStart = windowStart.addingTimeInterval(Double(index) * bucketSeconds)
+            let bucketEnd = bucketStart.addingTimeInterval(bucketSeconds)
+            var recordingSeconds = 0.0
+            var recordingStarts = 0.0
+
+            for interval in intervalSnapshot {
+                let overlapStart = max(interval.start, bucketStart)
+                let overlapEnd = min(interval.end, bucketEnd)
+                if overlapEnd > overlapStart {
+                    recordingSeconds += overlapEnd.timeIntervalSince(overlapStart)
+                }
+                if interval.start >= bucketStart && interval.start < bucketEnd {
+                    recordingStarts += 1.0
+                }
+            }
+
+            var interactionUnits = 0.0
+            for event in interactionSnapshot where event.date >= bucketStart && event.date < bucketEnd {
+                interactionUnits += event.units
+            }
+
+            let durationScore = min(1.0, recordingSeconds / bucketSeconds)
+            let frequencyScore = min(1.0,
+                                     (recordingStarts + interactionUnits) /
+                                         Self.recordingStartTargetPerBucket)
+            result[index] = min(1.0, durationScore * 0.70 + frequencyScore * 0.30)
         }
         return result.map { round($0 * 100) / 100 }
+    }
+
+    private func pruneLocked(now: Date) {
+        let cutoff = now.addingTimeInterval(-Self.activityWindowSeconds)
+        intervals.removeAll { $0.end < cutoff }
+        interactions.removeAll { $0.date < cutoff }
+    }
+
+    private func loadHistory() {
+        guard let data = try? Data(contentsOf: activityHistoryFileURL),
+              let history = try? JSONDecoder().decode(StoredHistory.self, from: data) else {
+            return
+        }
+        intervals = history.intervals
+        interactions = history.interactions
+        pruneLocked(now: Date())
+    }
+
+    private func saveHistory(_ history: StoredHistory) {
+        do {
+            try FileManager.default.createDirectory(at: supportDirectoryURL,
+                                                    withIntermediateDirectories: true)
+            let data = try JSONEncoder().encode(history)
+            try data.write(to: activityHistoryFileURL, options: .atomic)
+        } catch {
+            log("activity history save failed: \(error.localizedDescription)")
+        }
     }
 }
 
@@ -1148,9 +1334,9 @@ private func buildDevicePanel() throws -> Data {
         "total_tokens_label": "--",
         "model_label": "Codex",
         "reasoning_label": sessionActive ? "active" : "idle",
-        "activity_label": sessionActive ? "live" : "2h",
+        "activity_label": sessionActive ? "live" : "4h",
         "activity_live": sessionActive,
-        "activity_window": "2h",
+        "activity_window": "4h",
         "activity_buckets": OpenWatcherHomeActivityTracker.shared.buckets()
     ]
     let codex: [String: Any] = [
@@ -1741,6 +1927,17 @@ private final class BridgeAppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+private struct PendingPanelTransfer {
+    let chunks: [Data]
+    let seq: Int
+    let bytes: Int
+    let kind: String
+    let finalStatus: String
+    let reason: String
+    let characteristic: CBCharacteristic
+    var index: Int = 0
+}
+
 private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     private let options: Options
     private var central: CBCentralManager!
@@ -1785,8 +1982,11 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private var microphoneDroppedBaseline: UInt32 = 0
     private var microphoneDroppedBaselineAt: Date?
     private var lastBridgeConfigPayload: String?
+    private var lastSentCodexUnreadCount: Int?
     private var statusWriteQueue: [(payload: String, label: String)] = []
     private var statusWriteInFlight = false
+    private var panelTransfers: [PendingPanelTransfer] = []
+    private var panelWriteInFlight = false
     private var didPromptAccessibility = false
 
     init(options: Options) {
@@ -2013,6 +2213,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
                 BridgeStatusCenter.shared.bleStatus = "Bridge ready"
                 log("Status characteristic ready.")
                 sendBridgeHeartbeat(force: true)
+                refreshCodexUnreadStatus(force: true)
                 if !AXIsProcessTrusted() {
                     sendBridgeLimited()
                 }
@@ -2101,16 +2302,29 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             activeMicrophoneControlCommand = nil
             microphoneControlWriteInFlight = false
             handleMicrophoneControlResult(command, error: error)
-            sendNextMicrophoneControl()
+            pumpGattWrites()
             return
         }
-        guard characteristic.uuid == statusUUID else { return }
-        statusWriteInFlight = false
-        if let error {
-            BridgeStatusCenter.shared.lastError = error.localizedDescription
-            log("status write failed: \(error.localizedDescription)")
+        if characteristic.uuid == statusUUID {
+            statusWriteInFlight = false
+            if let error {
+                BridgeStatusCenter.shared.lastError = error.localizedDescription
+                log("status write failed: \(error.localizedDescription)")
+            }
+            pumpGattWrites()
+            return
         }
-        sendNextStatusWrite()
+        if characteristic.uuid == panelUUID {
+            panelWriteInFlight = false
+            if let error {
+                BridgeStatusCenter.shared.lastError = error.localizedDescription
+                log("panel write failed: \(error.localizedDescription)")
+                if !panelTransfers.isEmpty {
+                    panelTransfers.removeFirst()
+                }
+            }
+            pumpGattWrites()
+        }
     }
 
     private func handleDeviceEvent(_ text: String) {
@@ -2186,6 +2400,8 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         lastBridgeConfigPayload = nil
         statusWriteQueue.removeAll()
         statusWriteInFlight = false
+        panelTransfers.removeAll()
+        panelWriteInFlight = false
         bridgeDiscoveryInFlight = false
         microphoneResubscribePending = false
         microphoneOnDemandSupported = nil
@@ -2250,11 +2466,13 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             return
         }
         microphoneControlQueue.append(command)
-        sendNextMicrophoneControl()
+        pumpGattWrites()
     }
 
     private func sendNextMicrophoneControl() {
         guard !microphoneControlWriteInFlight,
+              !statusWriteInFlight,
+              !panelWriteInFlight,
               !microphoneControlQueue.isEmpty,
               let peripheral,
               let control = microphoneControlCharacteristic else {
@@ -2272,8 +2490,20 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         if type == .withoutResponse {
             activeMicrophoneControlCommand = nil
             handleMicrophoneControlResult(command, error: nil)
-            sendNextMicrophoneControl()
+            pumpGattWrites()
         }
+    }
+
+    private func pumpGattWrites() {
+        sendNextMicrophoneControl()
+        if microphoneControlWriteInFlight || !microphoneControlQueue.isEmpty {
+            return
+        }
+        sendNextStatusWrite()
+        if statusWriteInFlight || !statusWriteQueue.isEmpty {
+            return
+        }
+        sendNextPanelChunk()
     }
 
     private func handleMicrophoneControlResult(_ command: MicrophoneControlCommand?, error: Error?) {
@@ -2341,6 +2571,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         }
         if statusCharacteristic != nil {
             sendBridgeHeartbeat()
+            refreshCodexUnreadStatus(force: false)
             if !AXIsProcessTrusted() {
                 sendBridgeLimited()
             }
@@ -2482,17 +2713,37 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         queueStatusWrite(payload, label: "limited")
     }
 
+    private func refreshCodexUnreadStatus(force: Bool) {
+        guard statusCharacteristic != nil,
+              let count = currentCodexUnreadTaskCount() else {
+            return
+        }
+        let normalizedCount = min(max(count, 0), 999)
+        guard force || normalizedCount != lastSentCodexUnreadCount else {
+            return
+        }
+        let payload = "{\"type\":\"codex_unread\",\"version\":1,\"count\":\(normalizedCount)}"
+        lastSentCodexUnreadCount = normalizedCount
+        queueStatusWrite(payload, label: "codex unread")
+        log("Codex unread state synced: count=\(normalizedCount)")
+    }
+
     private func queueStatusWrite(_ payload: String, label: String) {
         guard payload.data(using: .utf8) != nil else { return }
         if label.hasPrefix("voice ") {
             statusWriteQueue.removeAll { $0.label.hasPrefix("voice ") }
+        } else if label == "codex unread" {
+            statusWriteQueue.removeAll { $0.label == "codex unread" }
         }
         statusWriteQueue.append((payload: payload, label: label))
-        sendNextStatusWrite()
+        pumpGattWrites()
     }
 
     private func sendNextStatusWrite() {
         guard !statusWriteInFlight,
+              !microphoneControlWriteInFlight,
+              microphoneControlQueue.isEmpty,
+              !panelWriteInFlight,
               let peripheral,
               let characteristic = statusCharacteristic,
               !statusWriteQueue.isEmpty else {
@@ -2501,7 +2752,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
 
         let item = statusWriteQueue.removeFirst()
         guard let data = item.payload.data(using: .utf8) else {
-            sendNextStatusWrite()
+            pumpGattWrites()
             return
         }
 
@@ -2511,7 +2762,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         } else {
             peripheral.writeValue(data, for: characteristic, type: .withoutResponse)
             log("status write sent without response: \(item.label)")
-            sendNextStatusWrite()
+            pumpGattWrites()
         }
     }
 
@@ -2801,46 +3052,51 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
                 let data = try JSONSerialization.data(withJSONObject: envelope, options: [])
                 chunks.append(data)
             }
-            sendPanelChunks(chunks,
-                            seq: seq,
-                            bytes: bytes.count,
-                            kind: kind,
-                            finalStatus: finalStatus,
-                            reason: reason,
-                            characteristic: characteristic)
+            panelTransfers.append(PendingPanelTransfer(chunks: chunks,
+                                                       seq: seq,
+                                                       bytes: bytes.count,
+                                                       kind: kind,
+                                                       finalStatus: finalStatus,
+                                                       reason: reason,
+                                                       characteristic: characteristic))
+            pumpGattWrites()
         } catch {
             BridgeStatusCenter.shared.lastError = error.localizedDescription
             log("\(kind) panel encode failed: \(error.localizedDescription)")
         }
     }
 
-    private func sendPanelChunks(_ chunks: [Data],
-                                 seq: Int,
-                                 bytes: Int,
-                                 kind: String,
-                                 finalStatus: String,
-                                 reason: String,
-                                 characteristic: CBCharacteristic,
-                                 index: Int = 0) {
-        guard let peripheral, index < chunks.count else {
-            if kind == "quota" || kind == "time" {
-                BridgeStatusCenter.shared.quotaStatus = finalStatus
-            }
-            log("\(kind) panel pushed seq=\(seq) bytes=\(bytes) parts=\(chunks.count) reason=\(reason)")
+    private func sendNextPanelChunk() {
+        guard !panelWriteInFlight,
+              !microphoneControlWriteInFlight,
+              microphoneControlQueue.isEmpty,
+              !statusWriteInFlight,
+              statusWriteQueue.isEmpty,
+              let peripheral else {
             return
         }
 
-        let writeType: CBCharacteristicWriteType = characteristic.properties.contains(.write) ? .withResponse : .withoutResponse
-        peripheral.writeValue(chunks[index], for: characteristic, type: writeType)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
-            self?.sendPanelChunks(chunks,
-                                  seq: seq,
-                                  bytes: bytes,
-                                  kind: kind,
-                                  finalStatus: finalStatus,
-                                  reason: reason,
-                                  characteristic: characteristic,
-                                  index: index + 1)
+        while !panelTransfers.isEmpty,
+              panelTransfers[0].index >= panelTransfers[0].chunks.count {
+            let completed = panelTransfers.removeFirst()
+            if completed.kind == "quota" || completed.kind == "time" {
+                BridgeStatusCenter.shared.quotaStatus = completed.finalStatus
+            }
+            log("\(completed.kind) panel pushed seq=\(completed.seq) bytes=\(completed.bytes) parts=\(completed.chunks.count) reason=\(completed.reason)")
+        }
+        guard !panelTransfers.isEmpty else { return }
+
+        let transfer = panelTransfers[0]
+        let chunk = transfer.chunks[transfer.index]
+        panelTransfers[0].index += 1
+        let writeType: CBCharacteristicWriteType = transfer.characteristic.properties.contains(.write)
+            ? .withResponse : .withoutResponse
+        panelWriteInFlight = writeType == .withResponse
+        peripheral.writeValue(chunk, for: transfer.characteristic, type: writeType)
+        if writeType == .withoutResponse {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
+                self?.pumpGattWrites()
+            }
         }
     }
 

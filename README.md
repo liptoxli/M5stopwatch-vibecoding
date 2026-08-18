@@ -1,73 +1,140 @@
-# M5stopwatch-vibecoding
+# M5 StopWatch for Vibe Coding
 
-![Version](https://img.shields.io/badge/version-v0.7.4-6f5cff)
-![Platform](https://img.shields.io/badge/platform-ESP32--S3%20%7C%20macOS-2f81f7)
+<p align="center">
+  <strong>把 M5Stack StopWatch 变成桌面上的 Codex 状态屏、语音输入控制器和实时蓝牙麦克风。</strong>
+</p>
 
-把 M5Stack StopWatch 变成 Codex、ChatGPT、Claude Code 和 IDE 的桌面状态屏与语音输入控制器。配套 macOS 菜单栏 App 可以把手表麦克风实时接入 Mac，并提供系统可用的 `M5 StopWatch Mic` 输入设备。
+<p align="center">
+  <img alt="Firmware v0.9.0" src="https://img.shields.io/badge/firmware-v0.9.0-6f5cff">
+  <img alt="Bridge v1.2.0" src="https://img.shields.io/badge/macOS%20Bridge-v1.2.0-35b8ff">
+  <img alt="ESP32-S3" src="https://img.shields.io/badge/hardware-ESP32--S3-ef6c35">
+  <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-55f36a">
+</p>
 
-当前固件版本是 **v0.7.4**（2026-08-16），配套 macOS Bridge 版本为 **v1.1.6**。查看[固件更新记录](CHANGELOG.md)、[Bridge 更新记录](tools/typeless_bridge/CHANGELOG.md)和[最新下载](https://github.com/liptoxli/M5stopwatch-vibecoding/releases/latest)。
+<p align="center">
+  <img alt="OpenWatcher V2 界面" src="docs/assets/openwatcher-v2-ui.svg" width="520">
+</p>
 
-![Codex StopWatch 实机运行效果](docs/assets/codex-stopwatch-ui-actual.jpeg)
+M5 StopWatch for Vibe Coding 为 Codex、ChatGPT、Claude Code 和 IDE 工作流增加了一层独立的物理交互：按下实体键开始讲话，StopWatch 麦克风通过 BLE 实时传到 Mac，再由系统输入设备 `M5 StopWatch Mic` 交给 Typeless 等语音输入应用。屏幕同时显示 Codex 周额度、当天用量、最近四小时的使用强度、未读任务和连接状态。
 
-圆形 AMOLED 屏可以显示 Codex 周额度、宠物状态、蓝牙连接和电量；实体 A/B 键可以控制语音输入与发送；macOS Bridge 负责蓝牙连接、按键配置、额度同步和虚拟麦克风。
+它不是录音机，也不会先生成 WAV 文件。语音以 16 kHz IMA-ADPCM 实时流传输，停止讲话后即可进入识别和发送流程。
 
-## 为什么适合 vibe coding
+## 项目现状
 
-Vibe coding 的输入瓶颈通常不在代码编辑器，而在“把想法连续、低摩擦地说出来”。长提示词、需求拆解、错误复盘、方案对比和上下文补充都更适合语音输入；如果每次都要切窗口、找快捷键或确认输入法状态，思路很容易被打断。
+当前版本为 **固件 v0.9.0 / macOS Bridge v1.2.0**，核心链路已经在真实设备上完成日常使用验证。
 
-M5Stack StopWatch 的形态很适合作为 vibe-coding 语音输入遥控器：
+| 能力 | 当前状态 |
+| --- | --- |
+| StopWatch 麦克风 → BLE → Mac 虚拟麦克风 → Typeless | 已完成，支持实时语音输入 |
+| A/B 实体键、长按、摇晃操作 | 已完成，按键由设备通过 BLE HID 直接发送 |
+| Codex 周额度、当天消耗和重置倒计时 | 已完成，由 Mac Bridge 本地读取并推送摘要 |
+| Codex 未读任务提醒 | 已完成，标题和颜色随未读数量变化 |
+| 最近四小时使用强度 | 已完成，24 格滚动窗口，每格 10 分钟 |
+| Classic / Pet 与 OpenWatcher V2 两套 UI | 已完成，可在设备中切换 |
+| 断线与音频异常处理 | 已完成，异常时结束本次听写并提示重新录制 |
+| 省电、息屏和自动关机 | 已完成，日常混合使用约为 5 小时级 |
 
-- 实体 A/B 键尺寸明确，盲按比键盘组合键更稳定，适合一边看 Codex / IDE，一边启动或结束语音输入。
-- 圆形 AMOLED 屏可以常驻显示“正在录制 / 处理中 / 已空闲”、Codex 额度、电量和连接状态，不需要把注意力切回输入法窗口。
-- 设备通过 BLE HID 直接发真实按键；macOS App 只同步状态和配置，不注入文字或模拟复杂焦点操作，因此更适合长时间编码时保持输入链路稳定。
-- 支持 Typeless 和微信输入法两种语音输入路径：用户可以在 App 里切换模式，设备按键绑定会同步到固件，脱离 App 时也能保留基础按键触发。
-- Shake 清除输入适合语音识别出错后的快速重来，减少从思考状态切回鼠标键盘操作的次数。
+当前版本适合实机体验、二次开发和日常语音输入。电量百分比仍以电池电压估算，低电量区会偏保守；因此页面中的续航数字是实测范围，不是实验室标称值。
 
-这个项目的目标不是替代语音输入法，而是给 Codex / ChatGPT / Claude Code / IDE 这类 vibe-coding 工作流加一个专用的“物理语音控制层”：让开始说、停止说、确认发送、清空重说这些动作从桌面操作里独立出来。
+## 两套界面
 
-## 目录
+<table>
+  <tr>
+    <th width="50%">Classic / Pet</th>
+    <th width="50%">OpenWatcher V2</th>
+  </tr>
+  <tr>
+    <td align="center"><img alt="Classic Pet UI" src="docs/assets/classic-pet-ui.svg" width="360"></td>
+    <td align="center"><img alt="OpenWatcher V2 UI" src="docs/assets/openwatcher-v2-ui.svg" width="360"></td>
+  </tr>
+  <tr>
+    <td>延续项目最早的桌面伙伴方向，以时间、额度弧线、Pet 动画和轻量状态反馈为核心。适合喜欢角色感和动态反馈的用户。</td>
+    <td>当前重点优化的效率界面。信息层级更直接，强调剩余额度、当天消耗、四小时活动热力图和未读任务状态。</td>
+  </tr>
+</table>
 
-```text
-firmware-stopwatch-idf/   ESP-IDF 固件
-tools/typeless_bridge/    macOS 菜单栏桥接应用
-docs/                     功能说明、额度机制、宠物替换指南
-```
+### OpenWatcher V2 的设计重点
 
-## 核心功能
+- 顶部半圆进度条使用具有语义的渐变色：剩余额度越充足越接近绿色，额度紧张时逐步转为黄色、橙色和红色。
+- 中央只突出“剩余百分比”，左侧单独显示当天已使用量，避免“已用”和“剩余”同时占据视觉中心。
+- 24 个方格覆盖最近四小时，每格代表 10 分钟；颜色深浅由实际录音时长和启动频率共同决定。
+- 标题同时承担 Codex 通知作用：无未读为蓝色，1 个为黄色、2 个为橙色、3 个及以上为红色。
+- 静态区域按变化更新，录音波形限制刷新频率，兼顾实体按键响应、界面流畅度和功耗。
 
-- Codex 页面：只显示周额度、08:00 后今日消耗、重置倒计时、时间、连接状态和宠物动画。
-- macOS Bridge：连接 `M5Codex-*` BLE 设备，推送 Codex 额度，切换输入模式，配置 A/B/摇晃动作。
-- 虚拟麦克风：菜单一键开启 `M5 StopWatch Mic`，StopWatch 以 16 kHz IMA-ADPCM 实时传输，Mac Bridge 解码后供 Typeless 等应用作为默认输入。
-- 输入模式：支持 Typeless 和微信输入法两套语音输入模式；按键绑定会保存到 macOS app，并同步到固件 NVS，真实按键由设备 BLE HID 发出。
-- Typeless 状态：macOS Bridge 可通过 Accessibility 观察录音/处理中状态，并把状态同步到设备；输入触发仍由设备负责。
-- 电量状态栏：Codex 页面顶部下拉显示电量；20% 以下红色常驻，也可以手动上滑隐藏。
-- Pet：基于多帧 C 资产的 LVGL 图片动画，可替换为自己的形象。
-- 省电：1 分钟降亮度和降频，3 分钟关闭显示并进入 activity sleep，15 分钟且未接外部电源时由 PMIC 自动关机；Wi-Fi 默认关闭，额度优先由 macOS BLE 推送。
-- 供电策略：插着 USB 时不自动关机；activity sleep 不是重启，可以通过触摸、按键或移动恢复。
+## 为什么适合语音驱动的 Coding 工作流
 
-完整功能说明见 [docs/FEATURES.md](docs/FEATURES.md)。
-省电策略见 [docs/POWER_SAVING.md](docs/POWER_SAVING.md)。
-周额度圆屏几何见 [docs/WEEKLY_SEMICIRCLE_UI.md](docs/WEEKLY_SEMICIRCLE_UI.md)。
+- **不用切窗口**：盲按实体键即可开始或结束语音输入，思路不需要停下来找快捷键。
+- **状态在桌面上可见**：录音、处理中、断线、额度和未读任务都由圆屏即时反馈。
+- **是真正的系统麦克风**：Mac 端看到的是 `M5 StopWatch Mic` 输入设备，Typeless 等应用可以直接使用。
+- **链路简单可控**：设备负责真实 BLE HID 按键，Mac Bridge 负责音频、状态和额度同步。
+- **异常不会静默拼接**：录音中断后会结束本次听写并提示重说，避免把缺失中段的语音继续发送。
+
+## 续航
+
+当前省电策略包括 CPU 动态降频、麦克风按需启动、差分刷新、1 分钟降亮度、3 分钟息屏以及无外接电源时的 15 分钟自动关机。
+
+2026-08-17 至 2026-08-18 的一次真实混合使用测试中：
+
+- 累计实际开机时间为 **4 小时 33 分 55 秒**，关机时段已剔除。
+- 从首次可靠的 86% 电量记录到插入 USB 为 **4 小时 20 分 51 秒**。
+- 最后阶段包含屏幕常亮和频繁语音输入，属于偏重度使用。
+- 按相同负载粗略估算，完整电量约为 **5 小时级**。
+- 表显 0% 后设备仍继续运行至少 2 分 56 秒，说明低电量百分比仍需进一步校准。
+
+详细测试边界和每段记录见 [续航测试记录](docs/BATTERY_TEST.md)，省电机制见 [省电与降温策略](docs/POWER_SAVING.md)。
+
+## 使用方式
+
+1. 将固件刷入 M5Stack StopWatch。
+2. 在 macOS 蓝牙设置中配对名称为 `M5Codex-*` 的设备。
+3. 安装并启动 StopWatch BLE Bridge，允许辅助功能权限。
+4. 在菜单栏打开 `M5 StopWatch Mic`，并在语音输入应用中选择这个麦克风。
+5. 使用 A 键控制语音输入，使用 B 键确认或发送；具体键位可在 Bridge 中配置。
+
+Bridge 支持 Typeless 和微信输入法两种输入路径，也可以配合任何接受普通键盘快捷键和系统麦克风的应用使用。
+
+## 功能概览
+
+- 16 kHz、20 ms 分帧、4-bit IMA-ADPCM 的实时 BLE 音频。
+- macOS 菜单栏 Bridge 与 `M5 StopWatch Mic` Core Audio 输入设备。
+- BLE HID 实体按键、长按确认和摇晃清除。
+- Codex 周额度、当天使用量、重置倒计时和未读任务状态。
+- 最近四小时的设备使用强度热力图。
+- Typeless 录音、处理、空闲和异常状态反馈。
+- BLE 自动重连、音频输出自恢复和明确的录音中断提示。
+- Wi-Fi 默认关闭；Codex 数据优先通过低功耗 BLE 同步。
+
+完整说明可继续阅读：
+
+- [功能说明](docs/FEATURES.md)
+- [BLE 麦克风协议](docs/stopwatch-ble-microphone.md)
+- [Codex 额度机制](docs/QUOTA.md)
+- [隐私与安全](docs/SECURITY_AND_PRIVACY.md)
+- [Pet 自定义](docs/PET_CUSTOMIZATION.md)
 
 ## 版本历史
 
 | 日期 | 固件 | Mac Bridge | 主要更新 |
 | --- | --- | --- | --- |
-| 2026-08-16 | v0.7.4 | v1.1.6 | 录音断线明确报错并结束本次听写；重连后按一次 A 重新录制，不静默续接残缺语音 |
-| 2026-08-16 | v0.7.3 | v1.1.5 | BLE 保持连接，麦克风改为按需传输；设备 A 键和 Mac Typeless 快捷键都可立即唤醒 |
-| 2026-08-16 | v0.7.2 | v1.1.4 | 第二套 UI 差分刷新和 10 FPS 波形；语音状态不再触发完整额度面板刷新 |
-| 2026-08-16 | v0.7.1 | v1.1.3 | 修复第二套 UI 录音时的 A/B 按键响应和 Typeless 再次录音 |
-| 2026-08-16 | v0.7.0 | v1.1.2 | 实时 BLE 麦克风、虚拟输入、断线恢复和静音局部自恢复 |
-| 2026-08-15 | v0.6.0 | v1.0.3 | 周额度/08:00 日基线、输入配置和 Bridge 稳定性改进 |
-| 2026-06-13 | v0.5.0（界面 V0.5） | v1.0.0-v1.0.2 | Codex 页面、Pet、BLE Bridge、Typeless/微信输入模式和 BLE HID |
+| 2026-08-18 | v0.9.0 | v1.2.0 | Codex 未读任务标题、滚动四小时活动热力图、续航实测与新版项目首页 |
+| 2026-08-17 | v0.8.1 | v1.1.8 | 修复省电版本中的 BLE ATT 超时和反复断线，串行化 Bridge 写入并补齐进程守护 |
+| 2026-08-16 | v0.8.0 | v1.1.7 | 整机省电与降温，将活动窗口调整为最近四小时 |
+| 2026-08-16 | v0.7.4 | v1.1.6 | 录音断线明确报错并结束本次听写，重连后重新录制 |
+| 2026-08-16 | v0.7.3 | v1.1.5 | 麦克风改为按需传输，设备键和 Mac 快捷键都可唤醒 |
+| 2026-08-16 | v0.7.2 | v1.1.4 | OpenWatcher V2 差分刷新和 10 FPS 波形 |
+| 2026-08-16 | v0.7.1 | v1.1.3 | 修复 OpenWatcher V2 的按键响应和再次录音 |
+| 2026-08-16 | v0.7.0 | v1.1.2 | 实时 BLE 麦克风、虚拟输入和音频自恢复 |
+| 2026-08-15 | v0.6.0 | v1.0.3 | 周额度、输入配置和 Bridge 稳定性改进 |
+| 2026-06-13 | v0.5.0 | v1.0.0–v1.0.2 | 首个 Codex 页面、Pet、BLE Bridge 和输入模式 |
 
-每个版本的逐项变更分别记录在固件 [CHANGELOG](CHANGELOG.md) 和 Mac Bridge [CHANGELOG](tools/typeless_bridge/CHANGELOG.md)。
+逐项变更记录见 [固件 Changelog](CHANGELOG.md) 和 [Bridge Changelog](tools/typeless_bridge/CHANGELOG.md)。
 
-## 构建固件
+<details>
+<summary><strong>从源码构建</strong></summary>
 
-需要 ESP-IDF v5.5.x 和 M5Stack StopWatch 目标硬件。
+### 固件
 
-仓库根目录的 `VERSION` 和 `firmware-stopwatch-idf/version.txt` 是当前版本标识，构建前可运行 `tools/check_version.sh` 检查版本是否一致。
+需要 ESP-IDF v5.5.x 和 M5Stack StopWatch：
 
 ```bash
 cd firmware-stopwatch-idf
@@ -76,53 +143,31 @@ idf.py build
 idf.py flash
 ```
 
-首次安装、从 v0.6.0 或更早版本升级，或 `partitions.csv`/Bootloader 发生变化时，必须使用完整 `idf.py flash`。仅在设备已经使用当前分区布局、只是更新同一兼容版本的应用时，才使用 `idf.py app-flash`；否则旧分区表可能从错误地址启动并表现为黑屏。
+首次安装或分区表发生变化时使用完整 `idf.py flash`；确认分区布局兼容后才使用 `idf.py app-flash`。
 
-Wi-Fi 和远端 panel 默认关闭。如需启用，可在这里填写自己的 panel URL 和 Wi-Fi 信息：
-
-```text
-firmware-stopwatch-idf/main/apps/app_codex/codex_config.h
-```
-
-如果只使用 macOS Bridge 的 BLE 额度推送，可以保持 Wi-Fi 关闭。
-
-## 构建 macOS Bridge
+### macOS Bridge
 
 ```bash
 tools/typeless_bridge/build_stopwatch_ble_bridge.sh
 tools/typeless_bridge/install_launch_agent.sh
 ```
 
-安装后在系统设置里给 `StopWatch BLE Bridge` 开启：
+安装后在 `系统设置 → 隐私与安全性 → 辅助功能` 中允许 `StopWatch BLE Bridge`。
 
-```text
-Privacy & Security -> Accessibility
-```
+</details>
 
-LaunchAgent 默认 `RunAtLoad=true`、`KeepAlive=false`：开机自动启动，但用户退出后不会被强制拉起。
+## 隐私
 
-虚拟麦克风模式默认关闭。开启后虚拟输入保持可用，只有开始听写时才实时传输音频，不生成 WAV 文件；关闭后恢复原 macOS 默认输入。录音期间如果 BLE 或音频流中断，本次听写会明确报错并保留已有文字，重连后按 A 重新录制。协议、带宽和包结构见 [docs/stopwatch-ble-microphone.md](docs/stopwatch-ble-microphone.md)。Core Audio 驱动的许可证说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+- 固件不保存 OpenAI、Typeless、微信输入法或其他云服务凭据。
+- Mac Bridge 只在本机读取当前用户的 Codex 状态，并向设备发送额度、剩余时间、未读数量和运行状态摘要。
+- 麦克风音频只在本机通过 BLE 实时传给虚拟输入设备；本项目不生成 WAV 文件，也不提供云端录音服务。
 
-产品安装包会安装菜单栏 App、登录 LaunchAgent 和 `M5 StopWatch Mic` 驱动。如果 Mac 中仍有 `BlackHole 2ch`，确认新麦克风正常后可以单独卸载。
+## 开源许可
 
-## 额度机制
+本项目的原创代码和修改内容使用 [MIT License](LICENSE)。固件所包含的第三方组件继续遵循各自许可证。
 
-Codex 额度由 macOS 本机读取，不要求用户粘贴 token。Bridge 在用户开启额度推送时读取本机 Codex 登录文件，调用 ChatGPT/Codex 的本机已登录接口，只提取 604800 秒周窗口，并把安全摘要通过 BLE 写入设备。固件只缓存额度摘要，不接收登录凭据。
-
-Bridge 以本地时间每天 08:00 为日统计边界，累计本周期内周额度下降的百分点。Bridge 如果在 08:00 没运行，只能从边界后的第一次成功采样开始，不能回溯精确历史。
-
-Claude Code 额度不在固件里直接实现。建议参考 `ai-limit` 这类 macOS 开源额度监控工具的做法：在 Mac 侧读取本机登录/使用状态，生成安全摘要，再通过 Bridge 或本地服务推送给设备。详细说明见 [docs/QUOTA.md](docs/QUOTA.md)。
-
-## 隐私与安全
-
-- 固件不保存 OpenAI、Claude、Typeless、微信输入法或任何云服务 token。
-- 固件不读取浏览器 Cookie、Keychain 或 `~/.codex`。
-- macOS Bridge 只在本机读取本机登录状态，并只向设备发送额度百分比、剩余时间和状态字段。
+`M5 StopWatch Mic` 使用基于 BlackHole 的独立 Core Audio 驱动，该组件遵循 GPLv3；来源、固定提交和再分发要求见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ## 致谢
 
-固件基于 M5Stack StopWatch UserDemo，第三方组件保留各自许可证。
-
-## License
-
-See [LICENSE](LICENSE). Third-party components under `firmware-stopwatch-idf/components/` keep their original licenses.
+项目基于 M5Stack StopWatch UserDemo，并使用 ESP-IDF、LVGL、BlackHole 等开源项目。感谢所有上游项目和贡献者。

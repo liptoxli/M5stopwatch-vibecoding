@@ -2,6 +2,50 @@
 
 Mac Bridge 使用独立语义化版本。固件与 Bridge 的兼容版本关系见仓库根目录 [README](../../README.md#版本历史)。
 
+## [1.2.0] - 2026-08-18
+
+### Added
+
+- 读取本机 Codex 未读任务状态，过滤已归档的本地任务，并向固件发送轻量 `codex_unread` 数量消息。
+- 活动统计持久化到本机应用支持目录，Bridge 重启后可恢复最近四小时内已经完成的录音区间。
+
+### Changed
+
+- 最近四小时活动强度由离散事件权重改为“70% 实际录音时长 + 30% 启动频率”，避免短暂事件直接显示为重度使用。
+- 每个 10 分钟方格以四次录音启动作为频率参考；按键和摇晃只保留很小的交互权重。
+- 未读数量和活动面板继续复用串行 GATT 队列，只在数据变化时发送，不增加持续 BLE 流量。
+
+### Compatibility
+
+- 不修改 16 kHz IMA-ADPCM 音频格式、虚拟麦克风驱动、BLE HID 或现有按键配置。
+
+## [1.1.8] - 2026-08-17
+
+### Changed
+
+- 麦克风控制、状态同步和额度面板共用一个有优先级的 GATT 写入队列；录音开始/停止命令优先于普通状态和面板更新。
+- 额度面板分片改为等待上一条 `write-with-response` 完成后再发送，避免多个 ATT 请求重叠。
+- 完整安装流程会同步安装 60 秒进程守护，Bridge 异常退出后自动重新启动。
+
+### Fixed
+
+- 修复录音控制与额度面板并发写入时出现 ATT 响应超时、音频停顿和设备断线的问题。
+
+### Compatibility
+
+- 不修改 BLE characteristic、16 kHz IMA-ADPCM 音频格式、虚拟麦克风驱动和输入模式配置。
+
+## [1.1.7] - 2026-08-16
+
+### Changed
+
+- Codex 活动方格统计窗口从最近 2 小时扩展为最近 4 小时，继续使用 24 格，每格代表 10 分钟。
+- 面板数据中的 `activity_window` 和空闲标签同步更新为 `4h`。
+
+### Compatibility
+
+- 不修改 BLE 音频、按键、虚拟麦克风或额度同步协议。
+
 ## [1.1.6] - 2026-08-16
 
 ### Changed
@@ -110,6 +154,9 @@ Mac Bridge 使用独立语义化版本。固件与 Bridge 的兼容版本关系�
 - 支持 `M5Codex-*` 连接、Codex 额度推送、输入模式和按键配置同步。
 - 支持 Typeless 状态观察、LaunchAgent 安装和 arm64 ZIP 发布包。
 
+[1.2.0]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v1.2.0
+[1.1.8]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.1.8
+[1.1.7]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.1.7
 [1.1.6]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.1.6
 [1.1.5]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.1.5
 [1.1.4]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.1.4

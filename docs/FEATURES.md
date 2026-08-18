@@ -5,6 +5,7 @@
 M5 StopWatch Codex 是面向桌面 AI 编程工作流的状态屏和语音输入控制器，主要功能包括：
 
 - Codex 额度圆屏页面。
+- Codex 未读任务状态和最近四小时活动热力图。
 - Codex/Pet 状态动画。
 - 顶部下拉电量状态栏。
 - BLE GATT 配置和面板 payload。
@@ -26,7 +27,11 @@ M5 StopWatch Codex 是面向桌面 AI 编程工作流的状态屏和语音输入
 
 圆屏按 `466 x 466` AMOLED 设计：
 
-![Codex StopWatch 实机运行效果](assets/codex-stopwatch-ui-actual.jpeg)
+| Classic / Pet | OpenWatcher V2 |
+| --- | --- |
+| ![Classic Pet UI](assets/classic-pet-ui.svg) | ![OpenWatcher V2 UI](assets/openwatcher-v2-ui.svg) |
+
+Classic / Pet 以时间、额度弧线、Pet 动画和状态反馈为核心；OpenWatcher V2 以剩余额度、当天消耗、滚动四小时活动热力图和 Codex 未读任务为核心。
 
 - 顶部：当前时间，使用低调发光样式。
 - 下半圆连续弧线：历史已消耗底轨、08:00 后今日已消耗、当前周剩余额度。
@@ -36,6 +41,8 @@ M5 StopWatch Codex 是面向桌面 AI 编程工作流的状态屏和语音输入
 - 中央：Pet 主体和状态动画，整体位置略高于圆心。
 - 顶部时钟下方：BLE、Wi-Fi 状态点。
 - 顶部下拉层：电量状态栏。向下滑显示，向上滑隐藏。
+
+OpenWatcher V2 的活动区域包含 24 个方格，每格代表 10 分钟。上排为较早的两小时，下排为最近两小时，均从左向右推进；颜色由实际录音时长和录音启动频率共同决定。
 
 电量策略：
 
@@ -119,6 +126,7 @@ Bridge 菜单栏应用提供：
 - 保存每个输入模式自己的绑定配置。
 - 切换模式时恢复对应绑定，并同步到固件。
 - Codex 额度推送开关和刷新间隔。
+- Codex 未读任务数量和四小时活动摘要同步。
 - 可选 Typeless 快捷键同步。
 - 开机自启动，不强制保活。
 

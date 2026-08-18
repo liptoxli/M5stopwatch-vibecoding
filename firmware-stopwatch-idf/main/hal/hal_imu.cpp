@@ -33,6 +33,13 @@ void Hal::imu_init()
 
 void Hal::updateImuData()
 {
+    constexpr std::uint32_t kMinimumSampleIntervalMs = 50;
+    const std::uint32_t now = millis();
+    if (_imu_last_update_ms != 0 && now - _imu_last_update_ms < kMinimumSampleIntervalMs) {
+        return;
+    }
+    _imu_last_update_ms = now;
+
     if (_imu_sensor != NULL) {
         int available = 0;
         if (bmi270_bmm150_sensor_acceleration_available(_imu_sensor, &available) == ESP_OK && available > 0) {

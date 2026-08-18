@@ -27,6 +27,10 @@ void AppFft::onOpen()
 {
     mclog::tagInfo(getAppInfo().name, "on open");
 
+    if (!GetHAL().acquireAudioInput()) {
+        mclog::tagWarn(getAppInfo().name, "audio input unavailable");
+    }
+
     _key_manager = std::make_unique<input::KeyManager>();
 
     LvglLockGuard lock;
@@ -57,6 +61,8 @@ void AppFft::onRunning()
 void AppFft::onClose()
 {
     mclog::tagInfo(getAppInfo().name, "on close");
+
+    GetHAL().releaseAudioInput();
 
     _key_manager.reset();
 

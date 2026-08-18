@@ -40,6 +40,10 @@ bool host_voice_active();
 VoicePhase host_voice_phase();
 uint32_t host_voice_sequence();
 
+bool host_codex_unread_valid();
+int host_codex_unread_count();
+uint32_t host_codex_unread_sequence();
+
 bool host_panel_valid();
 std::string host_panel_json();
 uint32_t host_panel_sequence();

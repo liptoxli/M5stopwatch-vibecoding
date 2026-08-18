@@ -10,6 +10,7 @@
 #include <lgfx/v1/panel/Panel_AMOLED.hpp>
 #include <smooth_ui_toolkit.hpp>
 #include <uitk/short_namespace.hpp>
+#include <algorithm>
 #include <memory>
 
 static const std::string_view _tag = "HAL-Display";
@@ -301,6 +302,8 @@ Hal::TouchPoint Hal::getTouchPoint()
 
 static SemaphoreHandle_t xGuiSemaphore;
 static std::atomic<bool> _lvgl_update_enabled = false;
+static std::atomic<bool> _lvgl_tick_running = false;
+static esp_timer_handle_t _lvgl_tick_timer_handle = nullptr;
 
 #define LV_BUFFER_LINE 120
 
@@ -314,11 +317,12 @@ static void lvgl_rtos_task(void *pvParameter)
 {
     (void)pvParameter;
     while (1) {
+        uint32_t next_delay_ms = 100;
         if (_lvgl_update_enabled && pdTRUE == xSemaphoreTake(xGuiSemaphore, portMAX_DELAY)) {
-            lv_timer_handler();
+            next_delay_ms = std::clamp<uint32_t>(lv_timer_handler(), 5, 50);
             xSemaphoreGive(xGuiSemaphore);
         }
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(next_delay_ms));
     }
 }
 
@@ -413,9 +417,7 @@ void Hal::lvgl_init()
 
     xGuiSemaphore                                     = xSemaphoreCreateMutex();
     const esp_timer_create_args_t periodic_timer_args = {.callback = &lvgl_tick_timer, .name = "lvgl_tick_timer"};
-    esp_timer_handle_t periodic_timer;
-    ESP_ERROR_CHECK(esp_timer_create(&periodic_timer_args, &periodic_timer));
-    ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, 10 * 1000));
+    ESP_ERROR_CHECK(esp_timer_create(&periodic_timer_args, &_lvgl_tick_timer_handle));
     xTaskCreate(lvgl_rtos_task, "lvgl_rtos_task", 4096 * 4, NULL, 1, NULL);
 
     startLvglUpdate();
@@ -441,11 +443,27 @@ void Hal::lvglUnlock()
 void Hal::startLvglUpdate()
 {
     _lvgl_update_enabled = true;
+    bool expected = false;
+    if (_lvgl_tick_timer_handle != nullptr && _lvgl_tick_running.compare_exchange_strong(expected, true)) {
+        const esp_err_t ret = esp_timer_start_periodic(_lvgl_tick_timer_handle, 10 * 1000);
+        if (ret != ESP_OK) {
+            _lvgl_tick_running = false;
+            mclog::tagWarn(_tag, "LVGL tick start failed: {}", esp_err_to_name(ret));
+        }
+    }
 }
 
 void Hal::stopLvglUpdate()
 {
     _lvgl_update_enabled = false;
+    bool expected = true;
+    if (_lvgl_tick_timer_handle != nullptr && _lvgl_tick_running.compare_exchange_strong(expected, false)) {
+        const esp_err_t ret = esp_timer_stop(_lvgl_tick_timer_handle);
+        if (ret != ESP_OK) {
+            _lvgl_tick_running = true;
+            mclog::tagWarn(_tag, "LVGL tick stop failed: {}", esp_err_to_name(ret));
+        }
+    }
 }
 
 void Hal::requestFullDisplayRedraw()

@@ -55,6 +55,7 @@ void AppCodex::onOpen()
     // reconnect and deliver an interruption while the launcher is still on
     // screen, and that latched fault must not be mistaken for an old update.
     _applied_host_voice_sequence = 0;
+    _applied_host_unread_sequence = 0;
     _applied_host_panel_sequence = ble_bridge::host_panel_sequence();
     _applied_ble_connected = ble_bridge::is_connected();
     _voice_active = false;
@@ -173,11 +174,14 @@ void AppCodex::onRunning()
                              ble_status_sequence != _applied_ble_status_sequence;
     const bool voice_changed = _voice_active != _applied_voice_active ||
                                _voice_mode != _applied_voice_mode;
+    const uint32_t host_unread_sequence = ble_bridge::host_codex_unread_sequence();
+    const bool unread_changed = ble_bridge::host_codex_unread_valid() &&
+                                host_unread_sequence != _applied_host_unread_sequence;
     const uint32_t frame_ms = _view ? _view->frameIntervalMs() : 100;
     const bool view_due = _view && now - _last_view_update_ms >= frame_ms;
     const bool status_bar_due = now - _last_status_bar_update_ms >= kStatusBarFrameMs;
 
-    if (!quota_changed && !ble_changed && !voice_changed && !view_due && !status_bar_due) {
+    if (!quota_changed && !ble_changed && !voice_changed && !unread_changed && !view_due && !status_bar_due) {
         return;
     }
 
@@ -204,6 +208,11 @@ void AppCodex::onRunning()
             _view->setVoiceMode(_voice_mode);
             _applied_voice_active = _voice_active;
             _applied_voice_mode = _voice_mode;
+            view_state_changed = true;
+        }
+        if (unread_changed) {
+            _view->setUnreadTaskCount(ble_bridge::host_codex_unread_count());
+            _applied_host_unread_sequence = host_unread_sequence;
             view_state_changed = true;
         }
 

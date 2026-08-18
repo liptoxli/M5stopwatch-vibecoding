@@ -60,6 +60,8 @@ public:
         std::string reasoningLabel = "--";
         std::string activityLabel = "--";
         bool activityLive = false;
+        bool unreadStateValid = false;
+        int unreadTaskCount = 0;
         std::array<float, 24> activityBuckets = {};
         uint32_t messageExpiresAtMs = 0;
     };
@@ -74,6 +76,7 @@ public:
                     const std::string& message);
     void applySnapshot(const codex::QuotaSnapshot& snapshot);
     void applyBleState(bool connected, const std::string& hostMessage, bool hostMessageChanged);
+    void setUnreadTaskCount(int count);
     void setVoiceActive(bool active);
     void setVoiceMode(VoiceMode mode);
     bool consumeClearInputRequest();

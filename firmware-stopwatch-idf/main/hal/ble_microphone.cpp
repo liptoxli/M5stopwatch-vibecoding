@@ -55,6 +55,7 @@ std::atomic<std::uint32_t> g_stream_generation = 0;
 std::atomic<bool> g_capture_task_started = false;
 std::atomic<bool> g_link_update_task_running = false;
 std::atomic<std::uint8_t> g_link_update_attempts = 0;
+std::atomic<bool> g_audio_input_held = false;
 std::atomic<std::uint32_t> g_packets_sent = 0;
 std::atomic<std::uint32_t> g_packets_dropped = 0;
 std::atomic<std::uint32_t> g_pcm_bytes_sent = 0;
@@ -67,6 +68,30 @@ std::uint32_t g_sample_index = 0;
 TickType_t g_last_stats_tick = 0;
 TaskHandle_t g_capture_task_handle = nullptr;
 ima_adpcm::Encoder g_encoder;
+
+void schedule_link_update();
+
+bool acquire_stream_audio()
+{
+    bool expected = false;
+    if (!g_audio_input_held.compare_exchange_strong(expected, true)) {
+        return true;
+    }
+    if (GetHAL().acquireAudioInput()) {
+        return true;
+    }
+    g_audio_input_held = false;
+    ESP_LOGE(kTag, "audio input wake failed");
+    return false;
+}
+
+void release_stream_audio()
+{
+    bool expected = true;
+    if (g_audio_input_held.compare_exchange_strong(expected, false)) {
+        GetHAL().releaseAudioInput();
+    }
+}
 
 void wake_capture_task()
 {
@@ -223,8 +248,20 @@ void capture_task(void*)
     while (true) {
         apply_stop_deadline();
         if (!ble_microphone::is_streaming()) {
+            release_stream_audio();
             poll_stats();
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
+            continue;
+        }
+        // Codec/I2S wake-up may take time and must never run inside the
+        // NimBLE GATT callback. Keep all hardware work on the capture task.
+        if (!acquire_stream_audio()) {
+            g_voice_session_interrupted = true;
+            g_voice_requested = false;
+            if (g_stream_mode.load() == StreamMode::Continuous) {
+                g_stream_mode = StreamMode::Disabled;
+            }
+            vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
         const std::uint32_t generation = g_stream_generation.load();
@@ -249,10 +286,11 @@ void capture_task(void*)
     }
 }
 
-void schedule_link_update();
-
 void link_update_task(void*)
 {
+    // Use the v0.7.x stable profile for the full connection. macOS already
+    // treats the device as a low-latency BLE HID; changing 30/15 ms on every
+    // voice session creates competing connection-parameter updates.
     vTaskDelay(pdMS_TO_TICKS(1000));
     if (!g_connected.load() || g_connection_handle == BLE_HS_CONN_HANDLE_NONE) {
         g_link_update_task_running = false;
@@ -401,6 +439,8 @@ void on_disconnected()
     g_voice_requested = false;
     g_stop_at_tick = 0;
     g_connection_handle = BLE_HS_CONN_HANDLE_NONE;
+    // Do not touch Codec/I2S from the NimBLE GAP callback. The capture task
+    // observes the disconnected state and releases audio asynchronously.
     wake_capture_task();
 }
 

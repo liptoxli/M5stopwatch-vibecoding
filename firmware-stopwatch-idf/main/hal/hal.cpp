@@ -297,8 +297,10 @@ void Hal::configureCpuPower(bool lowPower)
     }
 
     const esp_pm_config_t config = {
-        .max_freq_mhz = lowPower ? 80 : 240,
-        .min_freq_mhz = 80,
+        // Keep the normal UI at 160 MHz. Drivers and explicit CPU_MAX locks
+        // (for example microphone capture) can still raise it to 240 MHz.
+        .max_freq_mhz = 240,
+        .min_freq_mhz = lowPower ? 80 : 160,
         .light_sleep_enable = false,
     };
     const esp_err_t ret = esp_pm_configure(&config);

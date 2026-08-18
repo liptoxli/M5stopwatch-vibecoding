@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="932" height="932" viewBox="0 0 466 466" role="img" aria-labelledby="title desc">
+  <title id="title">Classic Pet Codex interface</title>
+  <desc id="desc">Circular black interface with time, quota arcs, daily and remaining quota and a small animated Codex pet.</desc>
+  <defs>
+    <clipPath id="screen"><circle cx="233" cy="233" r="232"/></clipPath>
+    <linearGradient id="leftArc" x1="30" y1="100" x2="110" y2="360" gradientUnits="userSpaceOnUse"><stop stop-color="#70efff"/><stop offset="1" stop-color="#35b8ff"/></linearGradient>
+    <linearGradient id="rightArc" x1="360" y1="90" x2="430" y2="360" gradientUnits="userSpaceOnUse"><stop stop-color="#a994ff"/><stop offset="1" stop-color="#6f5cff"/></linearGradient>
+    <linearGradient id="pet" x1="190" y1="160" x2="280" y2="300" gradientUnits="userSpaceOnUse"><stop stop-color="#265a9a"/><stop offset=".55" stop-color="#172847"/><stop offset="1" stop-color="#09162b"/></linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <style>text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}</style>
+  </defs>
+  <g clip-path="url(#screen)">
+    <rect width="466" height="466" fill="#000"/>
+    <circle cx="233" cy="233" r="231.5" fill="none" stroke="#222b39"/>
+    <path d="M78 370 A205 205 0 0 1 78 96" fill="none" stroke="#1d3442" stroke-width="18" stroke-linecap="round"/>
+    <path d="M78 370 A205 205 0 0 1 78 126" fill="none" stroke="url(#leftArc)" stroke-width="13" stroke-linecap="round" filter="url(#glow)"/>
+    <path d="M388 96 A205 205 0 0 1 388 370" fill="none" stroke="#1d3442" stroke-width="18" stroke-linecap="round"/>
+    <path d="M388 96 A205 205 0 0 1 388 240" fill="none" stroke="url(#rightArc)" stroke-width="13" stroke-linecap="round" filter="url(#glow)"/>
+    <g><rect x="159" y="13" width="66" height="54" rx="22" fill="#0a1b26"/><rect x="241" y="13" width="66" height="54" rx="22" fill="#0a1b26"/><text x="192" y="52" text-anchor="middle" font-size="34" fill="#eef2ff">12</text><text x="233" y="50" text-anchor="middle" font-size="32" fill="#eef2ff">:</text><text x="274" y="52" text-anchor="middle" font-size="34" fill="#eef2ff">48</text></g>
+    <text x="96" y="199" text-anchor="middle" font-size="18" fill="#64a9ca">TODAY</text><text x="96" y="230" text-anchor="middle" font-size="27" font-weight="650" fill="#64a9ca">4%</text>
+    <text x="370" y="199" text-anchor="middle" font-size="18" fill="#a5edff">LEFT</text><text x="370" y="230" text-anchor="middle" font-size="27" font-weight="650" fill="#a5edff">56%</text>
+    <g filter="url(#glow)"><ellipse cx="233" cy="311" rx="60" ry="10" fill="#0b3a58" opacity=".65"/><rect x="169" y="149" width="128" height="146" rx="54" fill="url(#pet)" stroke="#2c8fd0" stroke-width="3"/><rect x="184" y="177" width="98" height="80" rx="29" fill="#07121e" stroke="#55dfff" stroke-width="2"/><path d="M209 202 L231 217 L209 232" fill="none" stroke="#d9fbff" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/><line x1="244" y1="232" x2="267" y2="232" stroke="#d9fbff" stroke-width="7" stroke-linecap="round"/><ellipse cx="193" cy="286" rx="22" ry="13" fill="#153f6d"/><ellipse cx="273" cy="286" rx="22" ry="13" fill="#153f6d"/></g>
+    <text x="233" y="341" text-anchor="middle" font-size="22" fill="#eef2ff">Ready</text>
+    <text x="233" y="399" text-anchor="middle" font-size="20" fill="#8c96b3">RESET 4D 8H</text>
+    <circle cx="226" cy="438" r="4" fill="#2f79ff"/><circle cx="240" cy="438" r="4" fill="#38e07d"/>
+  </g>
+</svg>

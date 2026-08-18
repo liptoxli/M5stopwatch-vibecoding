@@ -108,6 +108,9 @@ extern "C" void app_main(void)
         if (!GetHAL().isActivitySleeping()) {
             GetMooncake().update();
         }
-        GetHAL().delay(5);
+        // The UI already rate-limits its own animations. A 10 ms scheduler
+        // cadence keeps physical-key latency below one frame while allowing
+        // the idle task and dynamic-frequency scaling to run longer.
+        GetHAL().delay(10);
     }
 }
