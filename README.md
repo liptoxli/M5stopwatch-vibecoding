@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <img alt="Firmware v0.9.1" src="https://img.shields.io/badge/firmware-v0.9.1-6f5cff">
+  <img alt="Firmware v0.9.2" src="https://img.shields.io/badge/firmware-v0.9.2-6f5cff">
   <img alt="Bridge v1.2.0" src="https://img.shields.io/badge/macOS%20Bridge-v1.2.0-35b8ff">
   <img alt="ESP32-S3" src="https://img.shields.io/badge/hardware-ESP32--S3-ef6c35">
   <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-55f36a">
@@ -21,7 +21,7 @@ M5 StopWatch for Vibe Coding 为 Codex、ChatGPT、Claude Code 和 IDE 工作流
 
 ## 项目现状
 
-当前版本为 **固件 v0.9.1 / macOS Bridge v1.2.0**，核心链路已经在真实设备上完成日常使用验证。
+当前版本为 **固件 v0.9.2 / macOS Bridge v1.2.0**，核心链路已经在真实设备上完成日常使用验证。
 
 | 能力 | 当前状态 |
 | --- | --- |
@@ -118,6 +118,7 @@ Bridge 支持 Typeless 和微信输入法两种输入路径，也可以配合任
 
 | 日期 | 固件 | Mac Bridge | 主要更新 |
 | --- | --- | --- | --- |
+| 2026-08-18 | v0.9.2 | v1.2.0 | 最近四小时活动方格恢复为每列上、下交替，短时间使用也能同时利用两排显示 |
 | 2026-08-18 | v0.9.1 | v1.2.0 | 统一双 UI 的 A/B 语音交互，识别完成前不再误发送，并修正 Classic / Pet 首页预览 |
 | 2026-08-18 | v0.9.0 | v1.2.0 | Codex 未读任务标题、滚动四小时活动热力图、续航实测与新版项目首页 |
 | 2026-08-17 | v0.8.1 | v1.1.8 | 修复省电版本中的 BLE ATT 超时和反复断线，串行化 Bridge 写入并补齐进程守护 |

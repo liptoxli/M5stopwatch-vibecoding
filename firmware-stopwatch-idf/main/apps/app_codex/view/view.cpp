@@ -1150,8 +1150,8 @@ void CodexView::drawOpenWatcherV2(lv_layer_t* layer, const lv_area_t& coords)
 
     for (int i = 0; i < kCells; ++i) {
         const float activity = _state.activityBuckets[i];
-        const int col = i % 12;
-        const int row = i / 12;
+        const int col = i / 2;
+        const int row = i % 2;
         const int x = cell_x + col * (kCellSize + kCellGap);
         const int y = cell_y + row * (kCellSize + kCellGap);
 

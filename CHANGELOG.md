@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-08-18
+
+### Changed
+
+- 最近四小时活动方格恢复为每列上、下交替的时间顺序，让短时间使用也能同时利用两排显示；统计窗口、强度算法和历史数据保持不变。
+
+### Verified
+
+- ESP-IDF 重新配置后确认应用元数据为 v0.9.2，固件构建通过，应用分区仍有约 41% 空间。
+- 同一坐标修改的 v0.9.1 实机构建已完成 USB 刷写、Flash 哈希校验、启动和 BLE Bridge 自动连接验收。
+
 ## [0.9.1] - 2026-08-18
 
 ### Changed
@@ -191,7 +202,8 @@
 - 新增 Typeless/微信输入法输入模式、A/B 键绑定、摇晃清除和 BLE HID 输入。
 - 新增 Codex 额度 BLE 推送、隐私与安全说明、功能说明和 Pet 替换文档。
 
-[Unreleased]: https://github.com/liptoxli/M5stopwatch-vibecoding/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/liptoxli/M5stopwatch-vibecoding/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.9.2
 [0.9.1]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.9.1
 [0.9.0]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.9.0
 [0.8.1]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v0.8.1

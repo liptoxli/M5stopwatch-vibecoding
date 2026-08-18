@@ -1,6 +1,6 @@
 # StopWatch BLE microphone protocol
 
-Status: introduced in firmware v0.7.0 and validated with the current firmware v0.9.1 / StopWatch BLE Bridge v1.2.0.
+Status: introduced in firmware v0.7.0 and validated with the current firmware v0.9.2 / StopWatch BLE Bridge v1.2.0.
 
 The microphone is an additive service on the same bonded BLE connection used
 by HID and the existing Bridge service. It does not replace the full StopWatch
