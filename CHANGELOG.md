@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-08-18
+
+### Changed
+
+- Classic / Pet 与 OpenWatcher V2 共用同一套语音按键交互，不再因界面主题不同而产生行为差异。
+- Typeless 处于录音、识别或异常恢复阶段时，B 键临时执行与 A 键相同的开始、停止或重试操作。
+- 只有 Typeless 回到 Ready 后，B 键短按才发送 Return，长按才发送配置的确认动作，确保识别文字可以先人工检查。
+- 重绘 GitHub 首页中的 Classic / Pet 预览，恢复真实 Pet、状态卡、连接圆点和连续额度弧线布局。
+
+### Fixed
+
+- 修复识别尚未结束时按 B 可能提前提交文字并造成设备与 Typeless 状态不同步的问题。
+- 修复 B 键按下、长按或释放期间状态发生变化时可能落入错误确认分支的竞态。
+
+### Verified
+
+- ESP-IDF 构建通过，应用分区仍有约 41% 空间。
+- USB 应用刷写、Flash 哈希校验、设备启动和 BLE Bridge 自动连接均通过。
+- 实机验证 A 开始录音后可由 B 停止；回到 Ready 后 B 仍可正常确认发送。
+
 ## [0.9.0] - 2026-08-18
 
 ### Added
@@ -171,7 +191,8 @@
 - 新增 Typeless/微信输入法输入模式、A/B 键绑定、摇晃清除和 BLE HID 输入。
 - 新增 Codex 额度 BLE 推送、隐私与安全说明、功能说明和 Pet 替换文档。
 
-[Unreleased]: https://github.com/liptoxli/M5stopwatch-vibecoding/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/liptoxli/M5stopwatch-vibecoding/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.9.1
 [0.9.0]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.9.0
 [0.8.1]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v0.8.1
 [0.8.0]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v0.8.0

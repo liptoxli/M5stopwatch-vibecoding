@@ -111,7 +111,7 @@ For other input apps, leave Typeless shortcut sync disabled and configure shortc
 
 ### Input behavior
 
-The left key toggles voice input and the right key confirms/sends through firmware BLE HID. Holding the right key for two seconds sends the configured long-press action; the default is `Command+Return` for Codex guide/follow-up insertion. The bridge app observes device events only to update status on the StopWatch screen. It does not restore focus, queue Enter, or simulate keyboard events on macOS.
+The left key toggles voice input. In Typeless mode, the right key follows the same primary-key interaction while recording, processing, or recovering from an interruption, so it cannot submit text before the recognition result can be reviewed. Once Typeless returns to idle/ready, a right-key tap confirms/sends through firmware BLE HID; holding it for two seconds sends the configured long-press action, `Command+Return` by default. This interaction policy is shared by both StopWatch UI themes. The bridge app observes device events only to update status on the StopWatch screen. It does not restore focus, queue Enter, or simulate keyboard events on macOS.
 
 If Accessibility is unavailable, the app reports `bridge_limited` to the device. The device still sends its configured BLE HID keys, but Typeless state detection is limited.
 
@@ -301,7 +301,7 @@ the bridge can still keep the device connected and firmware HID input continues 
 
 ### Enter timing after voice recognition
 
-Enter is sent by the device firmware when the right key is pressed. If the input app has not finished inserting recognized text, wait for the device processing indicator to clear before pressing confirm.
+During recording or recognition, the right key is routed to the same interaction as the primary key and does not send Enter. Enter is available only after Typeless returns to idle/ready, leaving the recognized text visible for manual review before submission.
 
 ## Developer Notes
 

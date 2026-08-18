@@ -21,6 +21,9 @@ public:
 
 private:
     void handleBluetoothKeys();
+    void handlePrimaryInputDown(const char* sourceKey);
+    void handlePrimaryInputUp(const char* sourceKey);
+    bool shouldRouteConfirmAsPrimary() const;
     void enterVoiceInterrupted(uint32_t now);
     void updateBatteryStatusBar(uint32_t now);
 
@@ -41,6 +44,7 @@ private:
     bool _voice_active = false;
     bool _applied_voice_active = false;
     bool _confirm_long_sent = false;
+    bool _confirm_routes_to_primary = false;
     bool _voice_session_interrupted = false;
     uint32_t _primary_input_down_ms = 0;
     uint32_t _voice_mode_since_ms = 0;

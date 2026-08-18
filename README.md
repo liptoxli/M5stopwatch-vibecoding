@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <img alt="Firmware v0.9.0" src="https://img.shields.io/badge/firmware-v0.9.0-6f5cff">
+  <img alt="Firmware v0.9.1" src="https://img.shields.io/badge/firmware-v0.9.1-6f5cff">
   <img alt="Bridge v1.2.0" src="https://img.shields.io/badge/macOS%20Bridge-v1.2.0-35b8ff">
   <img alt="ESP32-S3" src="https://img.shields.io/badge/hardware-ESP32--S3-ef6c35">
   <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-55f36a">
@@ -21,7 +21,7 @@ M5 StopWatch for Vibe Coding 为 Codex、ChatGPT、Claude Code 和 IDE 工作流
 
 ## 项目现状
 
-当前版本为 **固件 v0.9.0 / macOS Bridge v1.2.0**，核心链路已经在真实设备上完成日常使用验证。
+当前版本为 **固件 v0.9.1 / macOS Bridge v1.2.0**，核心链路已经在真实设备上完成日常使用验证。
 
 | 能力 | 当前状态 |
 | --- | --- |
@@ -91,7 +91,7 @@ OpenWatcher V2 的界面方向参考了 [OpenWatcher](https://github.com/openwat
 2. 在 macOS 蓝牙设置中配对名称为 `M5Codex-*` 的设备。
 3. 安装并启动 StopWatch BLE Bridge，允许辅助功能权限。
 4. 在菜单栏打开 `M5 StopWatch Mic`，并在语音输入应用中选择这个麦克风。
-5. 使用 A 键控制语音输入，使用 B 键确认或发送；具体键位可在 Bridge 中配置。
+5. 使用 A 键控制语音输入。Typeless 正在录音或识别时，B 键与 A 键执行相同交互，不会提前发送；回到 Ready 后，B 键才确认或发送。具体键位可在 Bridge 中配置。
 
 Bridge 支持 Typeless 和微信输入法两种输入路径，也可以配合任何接受普通键盘快捷键和系统麦克风的应用使用。
 
@@ -118,6 +118,7 @@ Bridge 支持 Typeless 和微信输入法两种输入路径，也可以配合任
 
 | 日期 | 固件 | Mac Bridge | 主要更新 |
 | --- | --- | --- | --- |
+| 2026-08-18 | v0.9.1 | v1.2.0 | 统一双 UI 的 A/B 语音交互，识别完成前不再误发送，并修正 Classic / Pet 首页预览 |
 | 2026-08-18 | v0.9.0 | v1.2.0 | Codex 未读任务标题、滚动四小时活动热力图、续航实测与新版项目首页 |
 | 2026-08-17 | v0.8.1 | v1.1.8 | 修复省电版本中的 BLE ATT 超时和反复断线，串行化 Bridge 写入并补齐进程守护 |
 | 2026-08-16 | v0.8.0 | v1.1.7 | 整机省电与降温，将活动窗口调整为最近四小时 |

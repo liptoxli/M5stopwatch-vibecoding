@@ -61,6 +61,7 @@ void AppCodex::onOpen()
     _voice_active = false;
     _applied_voice_active = false;
     _confirm_long_sent = false;
+    _confirm_routes_to_primary = false;
     _voice_session_interrupted = false;
     _voice_mode = view::CodexView::VoiceMode::Idle;
     _applied_voice_mode = view::CodexView::VoiceMode::Idle;
@@ -259,60 +260,99 @@ void AppCodex::updateBatteryStatusBar(uint32_t now)
     }
 }
 
+bool AppCodex::shouldRouteConfirmAsPrimary() const
+{
+    if (!ble_bridge::is_typeless_input_mode()) {
+        return false;
+    }
+    const bool host_voice_busy = ble_bridge::host_voice_valid() &&
+                                 ble_bridge::host_voice_phase() != ble_bridge::VoicePhase::Idle;
+    return _voice_session_interrupted ||
+           ble_bridge::voice_session_interrupted() ||
+           host_voice_busy ||
+           _voice_active ||
+           _voice_mode != view::CodexView::VoiceMode::Idle;
+}
+
+void AppCodex::handlePrimaryInputDown(const char* sourceKey)
+{
+    const uint32_t now = GetHAL().millis();
+    const bool typeless_mode = ble_bridge::is_typeless_input_mode();
+    if (_voice_session_interrupted) {
+        if (!ble_bridge::is_connected()) {
+            GetHAL().vibrate(90, 120);
+            mclog::tagDebug(getAppInfo().name, "Voice retry waiting for BLE via {}", sourceKey);
+            return;
+        }
+        _voice_session_interrupted = false;
+        _fault_first_vibration_at_ms = 0;
+        _fault_second_vibration_at_ms = 0;
+        ble_bridge::clear_voice_session_interruption();
+        _voice_active = false;
+        mclog::tagInfo(getAppInfo().name, "Voice interruption cleared by {} retry", sourceKey);
+    }
+    const bool starting_voice = !typeless_mode || !_voice_active;
+    _primary_input_down_ms = now;
+    if (typeless_mode && _voice_active) {
+        _voice_mode = view::CodexView::VoiceMode::Processing;
+    } else {
+        _voice_active = true;
+        _voice_mode = view::CodexView::VoiceMode::Recording;
+    }
+    _voice_mode_since_ms = now;
+    ble_bridge::set_voice_capture_active(starting_voice);
+    mclog::tagDebug(getAppInfo().name, "BLE key {}: primary input down", sourceKey);
+    ble_bridge::send_typeless_option(ble_bridge::ButtonAction::Down);
+}
+
+void AppCodex::handlePrimaryInputUp(const char* sourceKey)
+{
+    const bool typeless_mode = ble_bridge::is_typeless_input_mode();
+    _primary_input_down_ms = 0;
+    if (!typeless_mode && _voice_active) {
+        _voice_active = false;
+        _voice_mode = view::CodexView::VoiceMode::Idle;
+        _voice_mode_since_ms = GetHAL().millis();
+        ble_bridge::set_voice_capture_active(false);
+    }
+    mclog::tagDebug(getAppInfo().name, "BLE key {}: primary input up", sourceKey);
+    ble_bridge::send_typeless_option(ble_bridge::ButtonAction::Up);
+}
+
 void AppCodex::handleBluetoothKeys()
 {
     auto& hal = GetHAL();
 
     if (hal.btnA.wasPressed()) {
-        const uint32_t now = GetHAL().millis();
-        const bool typeless_mode = ble_bridge::is_typeless_input_mode();
-        if (_voice_session_interrupted) {
-            if (!ble_bridge::is_connected()) {
-                GetHAL().vibrate(90, 120);
-                mclog::tagDebug(getAppInfo().name, "Voice retry waiting for BLE");
-                return;
-            }
-            _voice_session_interrupted = false;
-            _fault_first_vibration_at_ms = 0;
-            _fault_second_vibration_at_ms = 0;
-            ble_bridge::clear_voice_session_interruption();
-            _voice_active = false;
-            mclog::tagInfo(getAppInfo().name, "Voice interruption cleared by A retry");
-        }
-        const bool starting_voice = !typeless_mode || !_voice_active;
-        _primary_input_down_ms = now;
-        if (typeless_mode && _voice_active) {
-            _voice_mode = view::CodexView::VoiceMode::Processing;
-        } else {
-            _voice_active = true;
-            _voice_mode = view::CodexView::VoiceMode::Recording;
-        }
-        _voice_mode_since_ms = now;
-        ble_bridge::set_voice_capture_active(starting_voice);
-        mclog::tagDebug(getAppInfo().name, "BLE key A: primary input down");
-        ble_bridge::send_typeless_option(ble_bridge::ButtonAction::Down);
+        handlePrimaryInputDown("A");
     }
 
     if (hal.btnA.wasReleased()) {
-        const bool typeless_mode = ble_bridge::is_typeless_input_mode();
-        _primary_input_down_ms = 0;
-        if (!typeless_mode && _voice_active) {
-            _voice_active = false;
-            _voice_mode = view::CodexView::VoiceMode::Idle;
-            _voice_mode_since_ms = GetHAL().millis();
-            ble_bridge::set_voice_capture_active(false);
-        }
-        mclog::tagDebug(getAppInfo().name, "BLE key A: primary input up");
-        ble_bridge::send_typeless_option(ble_bridge::ButtonAction::Up);
+        handlePrimaryInputUp("A");
     }
 
     if (hal.btnB.wasPressed()) {
-    _confirm_long_sent = false;
-    _voice_session_interrupted = false;
-        mclog::tagDebug(getAppInfo().name, "BLE key B: confirm down");
+        _confirm_long_sent = false;
+        // Interaction policy shared by both UI themes: while Typeless is busy,
+        // B is a second primary key. Confirm actions are available only at idle.
+        _confirm_routes_to_primary = shouldRouteConfirmAsPrimary();
+        if (_confirm_routes_to_primary) {
+            mclog::tagDebug(getAppInfo().name, "BLE key B: routed to primary interaction");
+            handlePrimaryInputDown("B");
+        } else {
+            mclog::tagDebug(getAppInfo().name, "BLE key B: confirm down");
+        }
     }
 
     if (hal.btnB.isPressed() && !_confirm_long_sent && hal.btnB.pressedFor(kConfirmLongPressMs)) {
+        if (!_confirm_routes_to_primary && shouldRouteConfirmAsPrimary()) {
+            _confirm_routes_to_primary = true;
+            mclog::tagDebug(getAppInfo().name, "BLE key B: late-routed to primary interaction");
+            handlePrimaryInputDown("B");
+        }
+        if (_confirm_routes_to_primary) {
+            return;
+        }
         _confirm_long_sent = true;
         if (_voice_active) {
             _voice_active = false;
@@ -325,9 +365,21 @@ void AppCodex::handleBluetoothKeys()
     }
 
     if (hal.btnB.wasReleased()) {
+        if (_confirm_routes_to_primary) {
+            handlePrimaryInputUp("B");
+            _confirm_routes_to_primary = false;
+            mclog::tagDebug(getAppInfo().name, "BLE key B: primary interaction complete");
+            return;
+        }
         if (_confirm_long_sent) {
             _confirm_long_sent = false;
             mclog::tagDebug(getAppInfo().name, "BLE key B: confirm release after long press");
+            return;
+        }
+        if (shouldRouteConfirmAsPrimary()) {
+            mclog::tagDebug(getAppInfo().name, "BLE key B: release safety-routed to primary interaction");
+            handlePrimaryInputDown("B");
+            handlePrimaryInputUp("B");
             return;
         }
         if (_voice_active) {
@@ -347,13 +399,14 @@ void AppCodex::onClose()
 {
     mclog::tagInfo(getAppInfo().name, "on close");
 
-    if (_voice_active) {
+    if (_voice_active || _confirm_routes_to_primary) {
         ble_bridge::send_typeless_option(ble_bridge::ButtonAction::Up);
     }
     ble_bridge::set_voice_capture_active(false);
     _key_manager.reset();
     _voice_active = false;
     _applied_voice_active = false;
+    _confirm_routes_to_primary = false;
     _voice_mode = view::CodexView::VoiceMode::Idle;
     _applied_voice_mode = view::CodexView::VoiceMode::Idle;
     _voice_mode_since_ms = GetHAL().millis();
