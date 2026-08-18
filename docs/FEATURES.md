@@ -33,6 +33,8 @@ M5 StopWatch Codex 是面向桌面 AI 编程工作流的状态屏和语音输入
 
 Classic / Pet 以时间、额度弧线、Pet 动画和状态反馈为核心；OpenWatcher V2 以剩余额度、当天消耗、滚动四小时活动热力图和 Codex 未读任务为核心。
 
+OpenWatcher V2 的界面方向参考了 [OpenWatcher](https://github.com/openwatcher-ai/openwatcher) 的 UI 设计思路，并针对 StopWatch 的 `466 x 466` 圆形 AMOLED、额度信息和实时语音输入流程重新设计。
+
 - 顶部：当前时间，使用低调发光样式。
 - 下半圆连续弧线：历史已消耗底轨、08:00 后今日已消耗、当前周剩余额度。
 - 左端标签：`TODAY`，显示本地 08:00 统计边界后的累计消耗百分点。

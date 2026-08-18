@@ -55,6 +55,8 @@ M5 StopWatch for Vibe Coding 为 Codex、ChatGPT、Claude Code 和 IDE 工作流
 
 ### OpenWatcher V2 的设计重点
 
+OpenWatcher V2 的界面方向参考了 [OpenWatcher](https://github.com/openwatcher-ai/openwatcher) 的 UI 设计思路，并在此基础上针对 `466 x 466` 圆形 AMOLED、Codex 周额度、最近四小时活动和实时语音输入场景重新设计。
+
 - 顶部半圆进度条使用具有语义的渐变色：剩余额度越充足越接近绿色，额度紧张时逐步转为黄色、橙色和红色。
 - 中央只突出“剩余百分比”，左侧单独显示当天已使用量，避免“已用”和“剩余”同时占据视觉中心。
 - 24 个方格覆盖最近四小时，每格代表 10 分钟；颜色深浅由实际录音时长和启动频率共同决定。
@@ -170,4 +172,6 @@ tools/typeless_bridge/install_launch_agent.sh
 
 ## 致谢
 
-项目基于 M5Stack StopWatch UserDemo，并使用 ESP-IDF、LVGL、BlackHole 等开源项目。感谢所有上游项目和贡献者。
+项目基于 M5Stack StopWatch UserDemo，并使用 ESP-IDF、LVGL、BlackHole 等开源项目。
+
+特别感谢 [OpenWatcher](https://github.com/openwatcher-ai/openwatcher)：新版界面参考了该项目的 UI 设计思路，并结合 StopWatch 的圆形屏幕、额度展示和语音输入流程进行了重新设计。感谢 OpenWatcher 项目带来的启发，也感谢所有上游项目和贡献者。
