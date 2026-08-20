@@ -8,6 +8,7 @@ import Foundation
 private let deviceNamePrefix = "M5Codex-"
 private let legacyDeviceNames: Set<String> = ["M5Codex-HID4", "M5Codex-HID5"]
 private let hidServiceUUID = CBUUID(string: "1812")
+private let hidReportUUID = CBUUID(string: "2A4D")
 private let serviceUUID = CBUUID(string: "ABCD0000-E819-B394-6344-2A2F31424C45")
 private let eventUUID = CBUUID(string: "ABCD0001-E819-B394-6344-2A2F31424C45")
 private let statusUUID = CBUUID(string: "ABCD0002-E819-B394-6344-2A2F31424C45")
@@ -104,6 +105,102 @@ private func currentCodexUnreadTaskCount() -> Int? {
         }
     }
     return effectiveLocalCodexUnreadCount(localIDs) + remoteIDs.count
+}
+
+private struct CodexUnreadTask: Equatable {
+    let id: String
+    let title: String
+}
+
+private func currentCodexUnreadTasks(limit: Int = 6) -> [CodexUnreadTask]? {
+    guard let data = try? Data(contentsOf: codexGlobalStateFileURL),
+          let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let persisted = root["electron-persisted-atom-state"] as? [String: Any],
+          let unreadByHost = persisted["unread-thread-ids-by-host-v1"] as? [String: Any] else {
+        return nil
+    }
+
+    var localIDs = Set<String>()
+    var remoteIDs = Set<String>()
+    for (host, value) in unreadByHost {
+        guard let ids = value as? [String] else { continue }
+        if host == "local" {
+            localIDs.formUnion(ids.filter(isSafeCodexThreadID))
+        } else {
+            remoteIDs.formUnion(ids.filter(isSafeCodexThreadID))
+        }
+    }
+
+    var tasks: [CodexUnreadTask] = []
+    var knownLocalIDs = Set<String>()
+    if !localIDs.isEmpty, FileManager.default.fileExists(atPath: codexStateDatabaseURL.path) {
+        let quoted = localIDs.sorted().map { "'\($0)'" }.joined(separator: ",")
+        let title = "replace(replace(COALESCE(NULLIF(name,''),NULLIF(title,''),'Unread Codex task'),char(9),' '),char(10),' ')"
+        let query = "SELECT id, \(title), archived FROM threads WHERE id IN (\(quoted)) ORDER BY updated_at DESC;"
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        process.arguments = ["-separator", "\t", codexStateDatabaseURL.path, query]
+        process.standardOutput = output
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            let outputData = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            if process.terminationStatus == 0,
+               let text = String(data: outputData, encoding: .utf8) {
+                for line in text.split(separator: "\n") {
+                    let fields = line.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
+                    guard fields.count == 3 else { continue }
+                    let id = String(fields[0])
+                    guard isSafeCodexThreadID(id) else { continue }
+                    knownLocalIDs.insert(id)
+                    guard fields[2] == "0", tasks.count < limit else { continue }
+                    let taskTitle = String(fields[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    tasks.append(CodexUnreadTask(id: id,
+                                                 title: taskTitle.isEmpty ? "Unread Codex task" : taskTitle))
+                }
+            }
+        } catch {
+            // The count-only status remains available if SQLite is briefly busy.
+        }
+    }
+
+    for id in localIDs.subtracting(knownLocalIDs).sorted() where tasks.count < limit {
+        tasks.append(CodexUnreadTask(id: id, title: "Unread Codex task"))
+    }
+    for id in remoteIDs.sorted() where tasks.count < limit {
+        tasks.append(CodexUnreadTask(id: id, title: "Remote Codex task"))
+    }
+    return Array(tasks.prefix(max(limit, 0)))
+}
+
+private func currentCodexThinkingEffort() -> String {
+    guard let data = try? Data(contentsOf: codexGlobalStateFileURL),
+          let root = try? JSONSerialization.jsonObject(with: data) else {
+        return "--"
+    }
+
+    func findEffort(_ value: Any) -> String? {
+        if let object = value as? [String: Any] {
+            if let effort = object["thinkingEffort"] as? String, !effort.isEmpty {
+                return effort
+            }
+            for nested in object.values {
+                if let effort = findEffort(nested) {
+                    return effort
+                }
+            }
+        } else if let array = value as? [Any] {
+            for nested in array {
+                if let effort = findEffort(nested) {
+                    return effort
+                }
+            }
+        }
+        return nil
+    }
+    return findEffort(root) ?? "--"
 }
 
 private enum MicrophoneControlCommand: UInt8 {
@@ -1333,7 +1430,7 @@ private func buildDevicePanel() throws -> Data {
         "compact_warning": pressure >= 82,
         "total_tokens_label": "--",
         "model_label": "Codex",
-        "reasoning_label": sessionActive ? "active" : "idle",
+        "reasoning_label": currentCodexThinkingEffort(),
         "activity_label": sessionActive ? "live" : "4h",
         "activity_live": sessionActive,
         "activity_window": "4h",
@@ -1948,6 +2045,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private var microphoneControlCharacteristic: CBCharacteristic?
     private var microphoneAudioCharacteristic: CBCharacteristic?
     private var microphoneStatsCharacteristic: CBCharacteristic?
+    private var hidNotifyCharacteristics: [CBCharacteristic] = []
     private let microphonePipeline = StopWatchMicrophonePipeline()
     private var eventNotifyEnabled = false
     private var lastState: VoiceState?
@@ -1983,10 +2081,14 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private var microphoneDroppedBaselineAt: Date?
     private var lastBridgeConfigPayload: String?
     private var lastSentCodexUnreadCount: Int?
+    private var lastSentCodexTasks: [CodexUnreadTask]?
+    private var codexTasksSequence = 1
     private var statusWriteQueue: [(payload: String, label: String)] = []
     private var statusWriteInFlight = false
     private var panelTransfers: [PendingPanelTransfer] = []
     private var panelWriteInFlight = false
+    private var reasoningFallbackQueue: [Bool] = []
+    private var reasoningFallbackInFlight = false
     private var didPromptAccessibility = false
 
     init(options: Options) {
@@ -2167,6 +2269,13 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             exit(1)
         }
         peripheral.discoverCharacteristics([eventUUID, statusUUID, panelUUID], for: service)
+        if let hidService = services.first(where: { $0.uuid == hidServiceUUID }) {
+            // The firmware exposes several Report (2A4D) characteristics. Subscribe
+            // to every notifying report so the vendor Codex Micro channel is
+            // restored as well as the standard keyboard/consumer reports after a
+            // BLE reconnect.
+            peripheral.discoverCharacteristics([hidReportUUID], for: hidService)
+        }
         if let microphoneService = services.first(where: { $0.uuid == stopWatchMicrophoneServiceUUID }) {
             peripheral.discoverCharacteristics(
                 [stopWatchMicrophoneControlUUID, stopWatchMicrophoneAudioUUID, stopWatchMicrophoneStatsUUID],
@@ -2186,6 +2295,17 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             exit(1)
         }
         bridgeDiscoveryInFlight = false
+
+        if service.uuid == hidServiceUUID {
+            hidNotifyCharacteristics = (service.characteristics ?? []).filter {
+                $0.uuid == hidReportUUID && $0.properties.contains(.notify)
+            }
+            for characteristic in hidNotifyCharacteristics where !characteristic.isNotifying {
+                peripheral.setNotifyValue(true, for: characteristic)
+            }
+            log("HID report recovery: subscribing to \(hidNotifyCharacteristics.count) notify characteristic(s).")
+            return
+        }
 
         if service.uuid == stopWatchMicrophoneServiceUUID {
             for characteristic in service.characteristics ?? [] {
@@ -2230,6 +2350,17 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     func peripheral(_ peripheral: CBPeripheral,
                     didUpdateNotificationStateFor characteristic: CBCharacteristic,
                     error: Error?) {
+        if characteristic.uuid == hidReportUUID {
+            if let error {
+                BridgeStatusCenter.shared.lastError = error.localizedDescription
+                log("HID report recovery subscription failed: \(error.localizedDescription)")
+            } else {
+                log(characteristic.isNotifying
+                    ? "HID report recovery subscription ready."
+                    : "HID report recovery subscription stopped.")
+            }
+            return
+        }
         if characteristic.uuid == stopWatchMicrophoneAudioUUID || characteristic.uuid == stopWatchMicrophoneStatsUUID {
             if let error {
                 microphoneResubscribePending = false
@@ -2285,6 +2416,11 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             log("microphone stats \(stats)")
             return
         }
+        if characteristic.uuid == hidReportUUID {
+            // macOS consumes HID reports through the system HID stack. This
+            // CoreBluetooth subscription is only a reconnect recovery aid.
+            return
+        }
         guard characteristic.uuid == eventUUID,
               let data = characteristic.value,
               let text = String(data: data, encoding: .utf8) else {
@@ -2328,6 +2464,27 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     }
 
     private func handleDeviceEvent(_ text: String) {
+        if text.hasPrefix("codex_open:") {
+            openCodexTask(String(text.dropFirst("codex_open:".count)))
+            return
+        }
+        if text == "codex_reasoning:increase" || text == "codex_reasoning:decrease" {
+            enqueueCodexReasoningDelta(text.hasSuffix("increase") ? 1 : -1)
+            return
+        }
+        if text.hasPrefix("codex_reasoning:delta:"),
+           let delta = Int(text.dropFirst("codex_reasoning:delta:".count)),
+           delta != 0 {
+            enqueueCodexReasoningDelta(delta)
+            return
+        }
+        if text == "codex_reasoning:native_sync" {
+            log("native Codex Micro reasoning event observed; scheduling confirmed-state refresh")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+                self?.pushQuotaPanel(reason: "reasoning-native")
+            }
+            return
+        }
         switch text {
         case "input_primary_down":
             handlePrimaryInputDown()
@@ -2339,11 +2496,132 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             handleCodexEnterRequest()
         case "shake_action":
             handleShakeActionRequest()
+        case "codex_new":
+            openNewCodexTask()
         case "typeless_option_tap_host", "typeless_option_down", "typeless_option_up", "typeless_option_tap", "codex_enter":
             log("legacy bridge event ignored after input protocol cleanup: \(text)")
         default:
             return
         }
+    }
+
+    private func openCodexTask(_ id: String) {
+        guard isSafeCodexThreadID(id),
+              let url = URL(string: "codex://threads/\(id)") else {
+            log("rejected invalid Codex task id")
+            return
+        }
+        NSWorkspace.shared.open(url)
+        log("opened Codex task \(id)")
+    }
+
+    private func openNewCodexTask() {
+        let running = NSWorkspace.shared.runningApplications.first {
+            $0.bundleIdentifier == "com.openai.codex"
+        }
+        if let running {
+            running.activate(options: [.activateAllWindows])
+        } else if let url = URL(string: "codex://") {
+            NSWorkspace.shared.open(url)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            guard let source = CGEventSource(stateID: .hidSystemState),
+                  let down = CGEvent(keyboardEventSource: source,
+                                     virtualKey: CGKeyCode(kVK_ANSI_N),
+                                     keyDown: true),
+                  let up = CGEvent(keyboardEventSource: source,
+                                   virtualKey: CGKeyCode(kVK_ANSI_N),
+                                   keyDown: false) else {
+                log("could not synthesize Codex new task shortcut")
+                return
+            }
+            down.flags = .maskCommand
+            up.flags = .maskCommand
+            down.post(tap: .cghidEventTap)
+            up.post(tap: .cghidEventTap)
+            log("requested new Codex task")
+        }
+    }
+
+    private func enqueueCodexReasoningDelta(_ delta: Int) {
+        let boundedDelta = max(-8, min(8, delta))
+        guard boundedDelta != 0 else { return }
+        reasoningFallbackQueue.append(contentsOf: repeatElement(boundedDelta > 0,
+                                                                 count: abs(boundedDelta)))
+        log("queued Codex reasoning fallback delta \(boundedDelta); pending=\(reasoningFallbackQueue.count)")
+        pumpCodexReasoningFallback()
+    }
+
+    private func pumpCodexReasoningFallback() {
+        guard !reasoningFallbackInFlight, !reasoningFallbackQueue.isEmpty else { return }
+        reasoningFallbackInFlight = true
+        let increase = reasoningFallbackQueue.removeFirst()
+        changeCodexReasoning(increase: increase) { [weak self] in
+            guard let self else { return }
+            self.reasoningFallbackInFlight = false
+            if self.reasoningFallbackQueue.isEmpty {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) { [weak self] in
+                    self?.pushQuotaPanel(reason: "reasoning-fallback")
+                }
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                    self?.pumpCodexReasoningFallback()
+                }
+            }
+        }
+    }
+
+    private func changeCodexReasoning(increase: Bool,
+                                      completion: @escaping () -> Void) {
+        let command = increase ? "Increase reasoning effort" : "Decrease reasoning effort"
+        let running = NSWorkspace.shared.runningApplications.first {
+            $0.bundleIdentifier == "com.openai.codex"
+        }
+        if let running {
+            running.activate(options: [.activateAllWindows])
+        } else if let url = URL(string: "codex://") {
+            NSWorkspace.shared.open(url)
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let source = CGEventSource(stateID: .hidSystemState) else {
+                log("could not create Codex reasoning event source")
+                completion()
+                return
+            }
+            self?.postKey(CGKeyCode(kVK_ANSI_P), flags: [.maskCommand, .maskShift], source: source)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+                guard let textEvent = CGEvent(keyboardEventSource: source,
+                                              virtualKey: 0,
+                                              keyDown: true) else {
+                    log("could not type Codex reasoning command")
+                    completion()
+                    return
+                }
+                textEvent.keyboardSetUnicodeString(stringLength: command.utf16.count,
+                                                   unicodeString: Array(command.utf16))
+                textEvent.post(tap: .cghidEventTap)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+                    self?.postKey(CGKeyCode(kVK_Return), flags: [], source: source)
+                    log("requested Codex command: \(command)")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35,
+                                                   execute: completion)
+                }
+            }
+        }
+    }
+
+    private func postKey(_ key: CGKeyCode,
+                         flags: CGEventFlags,
+                         source: CGEventSource) {
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false) else {
+            return
+        }
+        down.flags = flags
+        up.flags = flags
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
     }
 
     private func scanForDevice(hidServiceOnly: Bool) {
@@ -2395,6 +2673,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         microphoneControlCharacteristic = nil
         microphoneAudioCharacteristic = nil
         microphoneStatsCharacteristic = nil
+        hidNotifyCharacteristics.removeAll()
         eventNotifyEnabled = false
         lastRediscoverAt = Date.distantPast
         lastBridgeConfigPayload = nil
@@ -2408,6 +2687,8 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         microphoneControlQueue.removeAll()
         activeMicrophoneControlCommand = nil
         microphoneControlWriteInFlight = false
+        reasoningFallbackQueue.removeAll()
+        reasoningFallbackInFlight = false
     }
 
     private func discoverBridgeServices(_ peripheral: CBPeripheral, reason: String) {
@@ -2417,7 +2698,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         }
         bridgeDiscoveryInFlight = true
         lastRediscoverAt = Date()
-        peripheral.discoverServices([serviceUUID, stopWatchMicrophoneServiceUUID])
+        peripheral.discoverServices([serviceUUID, stopWatchMicrophoneServiceUUID, hidServiceUUID])
     }
 
     func setVirtualMicrophoneEnabled(_ enabled: Bool) {
@@ -2560,7 +2841,6 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             microphoneAudioCharacteristic == nil ||
             microphoneStatsCharacteristic == nil
         )
-
         if (missingBridge || missingMicrophone) && Date().timeIntervalSince(lastRediscoverAt) > 8 {
             log("Bridge health check: rediscovering services/characteristics bridge=\(missingBridge) microphone=\(missingMicrophone).")
             discoverBridgeServices(peripheral, reason: "health")
@@ -2568,6 +2848,9 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
 
         if eventCharacteristic != nil && !eventNotifyEnabled {
             peripheral.setNotifyValue(true, for: eventCharacteristic!)
+        }
+        for characteristic in hidNotifyCharacteristics where !characteristic.isNotifying {
+            peripheral.setNotifyValue(true, for: characteristic)
         }
         if statusCharacteristic != nil {
             sendBridgeHeartbeat()
@@ -2715,17 +2998,39 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
 
     private func refreshCodexUnreadStatus(force: Bool) {
         guard statusCharacteristic != nil,
-              let count = currentCodexUnreadTaskCount() else {
+              let count = currentCodexUnreadTaskCount(),
+              let tasks = currentCodexUnreadTasks() else {
             return
         }
         let normalizedCount = min(max(count, 0), 999)
-        guard force || normalizedCount != lastSentCodexUnreadCount else {
+        guard force || normalizedCount != lastSentCodexUnreadCount || tasks != lastSentCodexTasks else {
             return
         }
-        let payload = "{\"type\":\"codex_unread\",\"version\":1,\"count\":\(normalizedCount)}"
         lastSentCodexUnreadCount = normalizedCount
-        queueStatusWrite(payload, label: "codex unread")
-        log("Codex unread state synced: count=\(normalizedCount)")
+        lastSentCodexTasks = tasks
+        queueStatusWrite("{\"type\":\"codex_unread\",\"version\":1,\"count\":\(normalizedCount)}",
+                         label: "codex unread")
+
+        let seq = codexTasksSequence
+        codexTasksSequence += 1
+        queueStatusWrite("{\"type\":\"codex_tasks\",\"version\":1,\"seq\":\(seq),\"count\":\(tasks.count)}",
+                         label: "codex tasks header")
+        for (index, task) in tasks.enumerated() {
+            let object: [String: Any] = [
+                "type": "codex_task",
+                "version": 1,
+                "seq": seq,
+                "index": index,
+                "id": task.id,
+                "title": String(task.title.prefix(48))
+            ]
+            guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+                  let payload = String(data: data, encoding: .utf8) else {
+                continue
+            }
+            queueStatusWrite(payload, label: "codex tasks item")
+        }
+        log("Codex unread state synced: count=\(normalizedCount) tasks=\(tasks.count)")
     }
 
     private func queueStatusWrite(_ payload: String, label: String) {
@@ -2734,6 +3039,8 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             statusWriteQueue.removeAll { $0.label.hasPrefix("voice ") }
         } else if label == "codex unread" {
             statusWriteQueue.removeAll { $0.label == "codex unread" }
+        } else if label == "codex tasks header" {
+            statusWriteQueue.removeAll { $0.label.hasPrefix("codex tasks") }
         }
         statusWriteQueue.append((payload: payload, label: label))
         pumpGattWrites()

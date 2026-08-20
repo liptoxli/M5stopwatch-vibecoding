@@ -2,6 +2,7 @@
  * BLE HID bridge for Typeless/Codex control.
  */
 #include "ble_bridge.h"
+#include "codex_micro_hid.h"
 #include "ble_microphone.h"
 
 #include <apps/app_codex/codex_config.h>
@@ -48,10 +49,10 @@ extern "C" void ble_store_config_init(void);
 constexpr const char* kTag = "BLE-Bridge";
 constexpr uint16_t kHidServiceUuid = BLE_SVC_HID_UUID16;
 constexpr uint16_t kAppearanceKeyboard = 0x03C1;
-constexpr uint16_t kVendorId = 0x02E5;
-constexpr uint16_t kProductId = 0x05E2;
+constexpr uint16_t kVendorId = 0x303A;
+constexpr uint16_t kProductId = 0x8360;
+constexpr int32_t kBondSchemaVersion = 2;
 constexpr uint8_t kKeyboardReportId = 1;
-constexpr uint8_t kConsumerReportId = 2;
 constexpr uint8_t kKeyEnter = 0x28;
 constexpr uint8_t kKeyBackspace = 0x2A;
 constexpr uint8_t kKeyA = 0x04;
@@ -79,63 +80,17 @@ const ble_uuid128_t kBridgeStatusUuid =
 const ble_uuid128_t kBridgePanelUuid =
     BLE_UUID128_INIT(0x45, 0x4C, 0x42, 0x31, 0x2F, 0x2A, 0x44, 0x63, 0x94, 0xB3, 0x19, 0xE8, 0x03, 0x00, 0xCD, 0xAB);
 
-const char kPnpId[7] = {
-    0x02,
+// Match the Codex Micro Device Information PnP ID exactly. ESP-IDF's DIS
+// helper copies seven bytes from this string; it does not prepend the source.
+const char kPnpId[8] = {
+    0x02,  // Vendor ID source: USB-IF
     static_cast<char>(kVendorId & 0xFF),
     static_cast<char>((kVendorId >> 8) & 0xFF),
     static_cast<char>(kProductId & 0xFF),
     static_cast<char>((kProductId >> 8) & 0xFF),
     0x01,
     0x01,
-};
-
-const uint8_t kKeyboardReportMap[] = {
-    0x05, 0x01,  // Usage Page (Generic Desktop)
-    0x09, 0x06,  // Usage (Keyboard)
-    0xA1, 0x01,  // Collection (Application)
-    0x85, kKeyboardReportId,
-    0x05, 0x07,  // Usage Page (Keyboard/Keypad)
-    0x19, 0xE0,  // Usage Minimum (Left Control)
-    0x29, 0xE7,  // Usage Maximum (Right GUI)
-    0x15, 0x00,
-    0x25, 0x01,
-    0x75, 0x01,
-    0x95, 0x08,
-    0x81, 0x02,  // Input (8 modifier bits)
-    0x95, 0x01,
-    0x75, 0x08,
-    0x81, 0x01,  // Input (reserved, constant)
-    0x95, 0x05,
-    0x75, 0x01,
-    0x05, 0x08,
-    0x19, 0x01,
-    0x29, 0x05,
-    0x91, 0x02,  // Output (LEDs)
-    0x95, 0x01,
-    0x75, 0x03,
-    0x91, 0x01,  // Output (LED padding)
-    0x95, 0x06,
-    0x75, 0x08,
-    0x15, 0x00,
-    0x26, 0xE7, 0x00,
-    0x05, 0x07,
-    0x19, 0x00,
-    0x2A, 0xE7, 0x00,
-    0x81, 0x00,  // Input (6 key slots)
-    0xC0,
-
-    0x05, 0x0C,  // Usage Page (Consumer)
-    0x09, 0x01,  // Usage (Consumer Control)
-    0xA1, 0x01,  // Collection (Application)
-    0x85, kConsumerReportId,
-    0x15, 0x00,
-    0x26, 0xFF, 0x03,
-    0x19, 0x00,
-    0x2A, 0xFF, 0x03,
-    0x75, 0x10,
-    0x95, 0x01,
-    0x81, 0x00,
-    0xC0,
+    '\0',
 };
 
 bool g_enabled = false;
@@ -163,6 +118,13 @@ uint32_t g_host_voice_sequence = 0;
 bool g_host_codex_unread_valid = false;
 int g_host_codex_unread_count = 0;
 uint32_t g_host_codex_unread_sequence = 0;
+bool g_host_codex_tasks_valid = false;
+std::vector<ble_bridge::CodexTask> g_host_codex_tasks;
+uint32_t g_host_codex_tasks_sequence = 0;
+int g_codex_tasks_seq = -1;
+int g_codex_tasks_expected_count = 0;
+int g_codex_tasks_next_index = 0;
+std::vector<ble_bridge::CodexTask> g_codex_tasks_buffer;
 TickType_t g_companion_ready_tick = 0;
 bool g_host_panel_valid = false;
 std::string g_host_panel_json;
@@ -535,6 +497,60 @@ void reset_panel_assembly()
     g_panel_buffer.clear();
 }
 
+void reset_codex_tasks_assembly()
+{
+    g_codex_tasks_seq = -1;
+    g_codex_tasks_expected_count = 0;
+    g_codex_tasks_next_index = 0;
+    g_codex_tasks_buffer.clear();
+}
+
+void finish_codex_tasks_assembly()
+{
+    g_host_codex_tasks = g_codex_tasks_buffer;
+    g_host_codex_tasks_valid = true;
+    ++g_host_codex_tasks_sequence;
+    ESP_LOGI(kTag, "Codex task list updated: count=%u", static_cast<unsigned>(g_host_codex_tasks.size()));
+    reset_codex_tasks_assembly();
+}
+
+void apply_codex_tasks_payload(const std::string& payload)
+{
+    const std::string type = json_string_field(payload, "type");
+    const int seq = json_int_field(payload, "seq");
+    if (type == "codex_tasks") {
+        const int count = std::clamp(json_int_field(payload, "count", 0), 0, 6);
+        reset_codex_tasks_assembly();
+        g_codex_tasks_seq = seq;
+        g_codex_tasks_expected_count = count;
+        g_codex_tasks_buffer.reserve(static_cast<size_t>(count));
+        if (count == 0) {
+            finish_codex_tasks_assembly();
+        }
+        return;
+    }
+
+    if (type != "codex_task") {
+        return;
+    }
+    const int index = json_int_field(payload, "index");
+    const std::string id = json_string_field(payload, "id");
+    std::string title = json_string_field(payload, "title");
+    if (seq != g_codex_tasks_seq || index != g_codex_tasks_next_index || id.empty()) {
+        reset_codex_tasks_assembly();
+        set_host_status("Codex tasks sync failed");
+        return;
+    }
+    if (title.empty()) {
+        title = "Unread Codex task";
+    }
+    g_codex_tasks_buffer.push_back({id, title});
+    ++g_codex_tasks_next_index;
+    if (g_codex_tasks_next_index == g_codex_tasks_expected_count) {
+        finish_codex_tasks_assembly();
+    }
+}
+
 void apply_panel_payload(const std::string& payload)
 {
     const int seq = json_int_field(payload, "seq");
@@ -593,7 +609,12 @@ void apply_voice_payload(const std::string& payload)
     }
 
     mark_companion_ready();
-    if (json_string_field(payload, "type") == "codex_unread") {
+    const std::string payload_type = json_string_field(payload, "type");
+    if (payload_type == "codex_tasks" || payload_type == "codex_task") {
+        apply_codex_tasks_payload(payload);
+        return;
+    }
+    if (payload_type == "codex_unread") {
         const int unread_count = std::clamp(json_int_field(payload, "count", 0), 0, 999);
         const bool changed = !g_host_codex_unread_valid || unread_count != g_host_codex_unread_count;
         g_host_codex_unread_valid = true;
@@ -886,6 +907,7 @@ int gap_event(ble_gap_event* event, void*)
             update_ble_battery_level();
             set_host_status("BLE connected");
             ESP_LOGI(kTag, "connected: handle=%d", event->connect.conn_handle);
+            codex_micro_hid::on_connected(event->connect.conn_handle);
             ble_microphone::on_connected(event->connect.conn_handle);
             const int rc = ble_gap_security_initiate(event->connect.conn_handle);
             ESP_LOGD(kTag, "security initiate: rc=%d", rc);
@@ -898,6 +920,7 @@ int gap_event(ble_gap_event* event, void*)
         }
         return 0;
     case BLE_GAP_EVENT_DISCONNECT:
+        codex_micro_hid::on_disconnected();
         ble_microphone::on_disconnected();
         g_connected = false;
         g_paired = false;
@@ -926,6 +949,7 @@ int gap_event(ble_gap_event* event, void*)
         set_host_status(g_paired ? "BLE paired" : "Pairing failed");
         return 0;
     case BLE_GAP_EVENT_SUBSCRIBE:
+        codex_micro_hid::on_gap_event(*event);
         ble_microphone::on_gap_event(*event);
         ESP_LOGI(kTag,
                  "subscribe: conn=%d attr=%d reason=%d notify %d->%d indicate %d->%d",
@@ -961,6 +985,7 @@ int gap_event(ble_gap_event* event, void*)
         return 0;
     case BLE_GAP_EVENT_CONN_UPDATE:
     case BLE_GAP_EVENT_PHY_UPDATE_COMPLETE:
+        codex_micro_hid::on_gap_event(*event);
         ble_microphone::on_gap_event(*event);
         return 0;
     case BLE_GAP_EVENT_REPEAT_PAIRING:
@@ -1013,6 +1038,33 @@ int gap_event(ble_gap_event* event, void*)
 void sync_callback()
 {
     g_started = true;
+
+    // The unified keyboard + Codex vendor report map is not compatible with
+    // bonds created by the former two-service layout. Clear only the NimBLE
+    // security/CCCD store once, preserving every application setting in NVS.
+    // The version marker prevents normal reboots from ever clearing a valid
+    // pairing again.
+    {
+        Settings settings("ble_bridge");
+        const int32_t stored_schema = settings.GetInt("bond_schema", 0);
+        if (stored_schema < kBondSchemaVersion) {
+            const int clear_rc = ble_store_clear();
+            if (clear_rc == 0) {
+                Settings writable_settings("ble_bridge", true);
+                writable_settings.SetInt("bond_schema", kBondSchemaVersion);
+                ESP_LOGI(kTag,
+                         "BLE bond migration complete: schema %ld -> %ld",
+                         static_cast<long>(stored_schema),
+                         static_cast<long>(kBondSchemaVersion));
+            } else {
+                ESP_LOGW(kTag,
+                         "BLE bond migration failed: schema=%ld rc=%d",
+                         static_cast<long>(stored_schema),
+                         clear_rc);
+            }
+        }
+    }
+
     ble_addr_t bonded_peers[4] = {};
     int bonded_peer_count = 0;
     const int bond_rc = ble_store_util_bonded_peers(bonded_peers, &bonded_peer_count, 4);
@@ -1214,8 +1266,8 @@ bool setup_hid_services()
     }
 
     ble_svc_dis_init();
-    ble_svc_dis_manufacturer_name_set("Liptox");
-    ble_svc_dis_model_number_set("M5StopWatch-Codex");
+    ble_svc_dis_manufacturer_name_set("Work Louder");
+    ble_svc_dis_model_number_set("Codex Micro Compatible");
     ble_svc_dis_serial_number_set("M5S3-Codex");
     ble_svc_dis_pnp_id_set(kPnpId);
 
@@ -1235,41 +1287,13 @@ bool setup_hid_services()
         set_host_status("Mic service failed");
         return false;
     }
-
-    ble_svc_hid_params hid = {};
-    hid.proto_mode_present = 1;
-    hid.proto_mode = BLE_SVC_HID_PROTO_MODE_REPORT;
-    hid.kbd_inp_present = 1;
-    hid.kbd_out_present = 1;
-    hid.rpts_len = 3;
-    hid.rpts[0].id = kKeyboardReportId;
-    hid.rpts[0].type = BLE_SVC_HID_RPT_TYPE_INPUT;
-    hid.rpts[0].len = sizeof(g_last_report);
-    hid.rpts[1].id = kKeyboardReportId;
-    hid.rpts[1].type = BLE_SVC_HID_RPT_TYPE_OUTPUT;
-    hid.rpts[1].len = 1;
-    hid.rpts[2].id = kConsumerReportId;
-    hid.rpts[2].type = BLE_SVC_HID_RPT_TYPE_INPUT;
-    hid.rpts[2].len = 2;
-    memcpy(hid.report_map, kKeyboardReportMap, sizeof(kKeyboardReportMap));
-    hid.report_map_len = sizeof(kKeyboardReportMap);
-    hid.external_rpt_ref = BLE_SVC_BAS_UUID16;
-    const uint8_t hid_info[4] = {
-        0x11,
-        0x01,
-        0x00,
-        0x01,
-    };
-    memcpy(&hid.hid_info, hid_info, sizeof(hid_info));
-
-    rc = ble_svc_hid_add(hid);
-    if (rc != 0) {
-        mclog::tagWarn(kTag, "hid service add failed: {}", rc);
-        set_host_status("HID add failed");
+    // Register one unified HID service containing the keyboard, consumer, and
+    // Codex vendor reports. macOS does not reliably surface a second HOGP HID
+    // service from the same BLE peripheral to node-hid.
+    if (!codex_micro_hid::register_service()) {
+        set_host_status("Codex Micro HID failed");
         return false;
     }
-
-    ble_svc_hid_init();
     ble_microphone::start_capture_task();
     return true;
 }
@@ -1491,6 +1515,63 @@ int host_codex_unread_count()
 uint32_t host_codex_unread_sequence()
 {
     return g_host_codex_unread_sequence;
+}
+
+bool host_codex_tasks_valid()
+{
+    return g_host_codex_tasks_valid;
+}
+
+std::vector<CodexTask> host_codex_tasks()
+{
+    return g_host_codex_tasks;
+}
+
+uint32_t host_codex_tasks_sequence()
+{
+    return g_host_codex_tasks_sequence;
+}
+
+bool request_open_codex_task(const std::string& taskId)
+{
+    if (taskId.empty() || taskId.size() > 64) {
+        return false;
+    }
+    const std::string event = "codex_open:" + taskId;
+    return notify_bridge_event(event.c_str());
+}
+
+bool request_new_codex_task()
+{
+    return notify_bridge_event("codex_new");
+}
+
+bool request_codex_reasoning_delta(int delta)
+{
+    if (delta == 0) {
+        return true;
+    }
+    if (codex_micro_hid::send_reasoning_delta(delta)) {
+        // The native Vendor HID event controls Codex. This companion event only
+        // asks the Mac bridge to refresh the confirmed reasoning label afterwards.
+        notify_bridge_event("codex_reasoning:native_sync");
+        return true;
+    }
+
+    // The Codex desktop client can leave the vendor input report unsubscribed
+    // after a BLE timeout while the companion service has already recovered.
+    // Preserve native HID as the primary route, but send one bounded companion
+    // request containing the full detent count so the Mac bridge can serialize
+    // the fallback without racing multiple command palettes.
+    const int bounded_delta = std::clamp(delta, -8, 8);
+    char event[40] = {};
+    std::snprintf(event, sizeof(event), "codex_reasoning:delta:%d", bounded_delta);
+    const bool sent = notify_bridge_event(event);
+    ESP_LOGW(kTag,
+             "native reasoning unavailable; companion fallback delta=%d sent=%d",
+             bounded_delta,
+             sent);
+    return sent;
 }
 
 bool host_panel_valid()

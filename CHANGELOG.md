@@ -4,6 +4,36 @@
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-20
+
+### Added
+
+- 新增 Codex Micro 兼容的 Vendor BLE HID 通道，并与现有键盘、Consumer Control 合并到同一个 HOGP 服务。
+- 新增四个原生 Agent 槽位入口，对应 `AG00` 至 `AG03`，可接收并显示宿主返回的颜色、亮度、灯效和速度。
+- 新增顶部推理等级左右滑动，支持一次手势连续改变多级，并在界面上显示 `LOWER/HIGHER` 反馈。
+- 新增中心四向 Radial 控制：长按进入后可输出上、下、左、右的连续角度与距离。
+- 新增 `AGENTS.md` 和 `docs/AGENT_DEVELOPMENT_GUIDE.md`，为代码 Agent 与二次开发者提供模块、参数、协议和验收指南。
+
+### Changed
+
+- OpenWatcher V2 下沿由六个 Agent 点精简为四个，沿圆形边框排列，增大可触摸面积并减少误触。
+- Agent 点改为两段式交互：触碰时先轻振和放大预览，保持 480ms 后再强振并提交。
+- 顶部 `Codex Ready / Linking / Offline` 只表示原生通讯状态，不再承担未读数量显示。
+- macOS Bridge 更新为 v1.3.0，可在 BLE 重连时恢复 HID Report 订阅，并同步推理等级确认状态。
+- HID 设备描述更新为 Codex Micro 兼容布局；首次升级会执行一次配对结构迁移，macOS 端需要忽略旧设备并重新配对。
+
+### Fixed
+
+- 修复触摸长按回调把“槽位灯效尚未分配”误判成 Agent 不可用的问题；槽位动作现在始终交给底层 HID 在线检查。
+- 修复多个 HOGP 服务在 macOS 上只暴露第一个服务，导致 Vendor Report 无法稳定被 Codex 发现的问题。
+- 修复蓝牙超时重连后标准按键正常、但 Codex Vendor Report 未重新订阅的问题。
+
+### Verified
+
+- ESP-IDF v5.5.4 构建通过，v0.10.0 应用分区保留约 38% 空间。
+- 实机完成 USB 应用刷写、Flash 哈希校验、重新配对、Bridge 自动恢复和虚拟麦克风健康检查。
+- 四个 Agent 点、两段式触摸、Codex 端槽位切换、推理等级、中心触摸、A/B 键和实时语音输入均完成实机验收。
+
 ## [0.9.2] - 2026-08-18
 
 ### Changed
@@ -202,7 +232,8 @@
 - 新增 Typeless/微信输入法输入模式、A/B 键绑定、摇晃清除和 BLE HID 输入。
 - 新增 Codex 额度 BLE 推送、隐私与安全说明、功能说明和 Pet 替换文档。
 
-[Unreleased]: https://github.com/liptoxli/M5stopwatch-vibecoding/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/liptoxli/M5stopwatch-vibecoding/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.10.0
 [0.9.2]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.9.2
 [0.9.1]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.9.1
 [0.9.0]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.9.0

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace ble_bridge {
 
@@ -15,6 +16,11 @@ enum class VoicePhase : uint8_t {
     Recording,
     Processing,
     Interrupted,
+};
+
+struct CodexTask {
+    std::string id;
+    std::string title;
 };
 
 void set_enabled(bool enabled);
@@ -43,6 +49,13 @@ uint32_t host_voice_sequence();
 bool host_codex_unread_valid();
 int host_codex_unread_count();
 uint32_t host_codex_unread_sequence();
+
+bool host_codex_tasks_valid();
+std::vector<CodexTask> host_codex_tasks();
+uint32_t host_codex_tasks_sequence();
+bool request_open_codex_task(const std::string& taskId);
+bool request_new_codex_task();
+bool request_codex_reasoning_delta(int delta);
 
 bool host_panel_valid();
 std::string host_panel_json();

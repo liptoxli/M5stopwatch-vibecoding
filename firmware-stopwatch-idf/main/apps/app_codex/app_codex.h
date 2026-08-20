@@ -21,6 +21,7 @@ public:
 
 private:
     void handleBluetoothKeys();
+    void handleTouchControls();
     void handlePrimaryInputDown(const char* sourceKey);
     void handlePrimaryInputUp(const char* sourceKey);
     bool shouldRouteConfirmAsPrimary() const;
@@ -36,6 +37,8 @@ private:
     uint32_t _applied_ble_status_sequence = 0;
     uint32_t _applied_host_voice_sequence = 0;
     uint32_t _applied_host_unread_sequence = 0;
+    uint32_t _applied_host_tasks_sequence = 0;
+    uint32_t _applied_native_status_sequence = 0;
     uint32_t _applied_host_panel_sequence = 0;
     uint32_t _last_view_update_ms = 0;
     uint32_t _last_status_bar_update_ms = 0;

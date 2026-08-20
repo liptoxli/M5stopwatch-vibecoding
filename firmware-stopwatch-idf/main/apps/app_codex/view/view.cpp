@@ -8,6 +8,8 @@
 #include <assets/assets.h>
 #include <hal/hal.h>
 #include <algorithm>
+#include <cctype>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <string_view>
@@ -43,7 +45,35 @@ constexpr uint32_t kOwAlert      = 0xFF405C;
 constexpr uint32_t kPetTouchEffectMs = 1050;
 constexpr uint32_t kPetIdleFrameMs = 50;
 constexpr uint32_t kPetActiveFrameMs = 33;
-
+constexpr uint32_t kActionWheelHoldMs = 480;
+constexpr uint32_t kActionWheelFrameMs = 33;
+constexpr int kActionWheelStartRadius = 72;
+constexpr int kNativeControlHoldSlop = 22;
+constexpr int kNativeControlDeadZone = 24;
+constexpr int kNativeControlFullScale = 120;
+constexpr uint32_t kNativeRadialFrameMs = 50;
+constexpr uint32_t kNativeAgentHoldMs = 480;
+constexpr uint32_t kNativeAgentPreviewFrameMs = 80;
+constexpr int kNativeAgentSwitchHysteresis = 8;
+constexpr int kReasoningTouchMinX = 120;
+constexpr int kReasoningTouchMaxX = 346;
+constexpr int kReasoningTouchMinY = 28;
+constexpr int kReasoningTouchMaxY = 112;
+constexpr int kReasoningSwipeThreshold = 44;
+struct NativeAgentPoint {
+    int x;
+    int y;
+};
+constexpr std::array<NativeAgentPoint, 4> kNativeAgentCenters = {{
+    {99, 367},
+    {184, 417},
+    {282, 417},
+    {367, 367},
+}};
+// The visible dots remain compact. This is an invisible finger target; the
+// four 84 px squares stay separate at the current arc spacing.
+constexpr int kNativeAgentHitSize = 84;
+constexpr int kNativeAgentHitHalf = kNativeAgentHitSize / 2;
 constexpr int kScreenSize = 466;
 constexpr int kScreenCenter = 233;
 constexpr int kScreenRadius = 233;
@@ -106,6 +136,19 @@ constexpr bool rectInsideRoundDisplay(int x, int y, int width, int height)
            pointInsideRoundDisplay(x + width - 1, y + height - 1);
 }
 
+constexpr bool pointInsideNativeAgentRail(int x, int y)
+{
+    for (const auto& center : kNativeAgentCenters) {
+        if (x >= center.x - kNativeAgentHitHalf &&
+            x < center.x + kNativeAgentHitHalf &&
+            y >= center.y - kNativeAgentHitHalf &&
+            y < center.y + kNativeAgentHitHalf) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static_assert(kQuotaRadius + kQuotaWidth / 2 <= kScreenRadius - 5,
               "Quota arc must stay inside the AMOLED safe radius");
 static_assert(rectInsideRoundDisplay(kQuotaLeftLabelX, kQuotaCaptionY, kQuotaEndpointLabelWidth, 60),
@@ -114,6 +157,8 @@ static_assert(rectInsideRoundDisplay(kQuotaRightLabelX, kQuotaCaptionY, kQuotaEn
               "Remaining quota labels must stay inside the round display");
 static_assert(rectInsideRoundDisplay(168, 394, 130, 28),
               "Quota refresh label must stay inside the round display");
+// The two outer invisible hit targets are intentionally clipped by the round
+// display. Their visible dots and usable touch area remain inside the circle.
 
 void setup_clock_digit_panel(Container& panel, int x)
 {
@@ -357,6 +402,10 @@ void CodexView::init(lv_obj_t* parent, ThemeMode themeMode)
                      7,
                      _theme_mode == ThemeMode::OpenWatcherV2 ? -22 : 71);
 
+    initActionWheel();
+    initTaskList();
+    initReasoningControl();
+
     updateConnectionDots();
     if (_theme_mode == ThemeMode::OpenWatcherV2) {
         updateOpenWatcherV2Labels();
@@ -368,11 +417,27 @@ void CodexView::init(lv_obj_t* parent, ThemeMode themeMode)
 
 void CodexView::update()
 {
+    if (_task_list_active) {
+        return;
+    }
+    updateReasoningGesture();
+    if (_reasoning_touch_tracking) {
+        return;
+    }
+    if (_native_agent_touch_tracking) {
+        return;
+    }
+    updateActionWheelGesture();
+    if (_action_wheel_active) {
+        return;
+    }
+
     if (_theme_mode != ThemeMode::OpenWatcherV2) {
         updateFlipClock();
     }
 
     const uint32_t now = GetHAL().millis();
+    updateNativeAgentRail(false);
     if (_state.messageExpiresAtMs != 0 && now > _state.messageExpiresAtMs) {
         _state.messageExpiresAtMs = 0;
         if (_theme_mode == ThemeMode::OpenWatcherV2) {
@@ -546,6 +611,51 @@ void CodexView::setUnreadTaskCount(int count)
     }
 }
 
+void CodexView::setUnreadTasks(const std::vector<TaskItem>& tasks)
+{
+    _unread_tasks = tasks;
+    updateTaskListRows();
+}
+
+void CodexView::setNativeAgentStates(bool ready,
+                                     bool communicating,
+                                     const std::array<NativeAgentState, 4>& agents)
+{
+    _native_agents_ready = ready;
+    _native_codex_communicating = communicating;
+    _native_agents = agents;
+    updateNativeAgentRail(true);
+    updateOpenWatcherV2Labels();
+}
+
+void CodexView::showTaskList()
+{
+    if (_unread_tasks.empty()) {
+        showActionMessage("NO UNREAD TASKS");
+        return;
+    }
+    setTaskListVisible(true);
+}
+
+std::string CodexView::consumeTaskOpenRequest()
+{
+    std::string request = _task_open_request;
+    _task_open_request.clear();
+    return request;
+}
+
+int CodexView::consumeNativeAgentSlotRequest()
+{
+    const int request = _native_agent_slot_request;
+    _native_agent_slot_request = -1;
+    return request;
+}
+
+void CodexView::showActionMessage(const char* message)
+{
+    setMessage(message, 1800);
+}
+
 void CodexView::setVoiceActive(bool active)
 {
     setVoiceMode(active ? VoiceMode::Recording : VoiceMode::Idle);
@@ -558,6 +668,21 @@ void CodexView::setVoiceMode(VoiceMode mode)
     }
 
     _voice_mode = mode;
+    if (mode != VoiceMode::Idle && _native_agent_touch_tracking) {
+        resetNativeAgentTouch();
+    }
+    if (mode != VoiceMode::Idle && (_action_wheel_active || _action_touch_tracking)) {
+        resetNativeTouchControl(true);
+        _native_control_blocked_until_release = true;
+    }
+    if (mode != VoiceMode::Idle && _task_list_active) {
+        setTaskListVisible(false);
+    }
+    if (mode != VoiceMode::Idle && _reasoning_touch_tracking) {
+        setReasoningControlVisible(false);
+        _reasoning_touch_tracking = false;
+        _reasoning_swipe_direction = 0;
+    }
     const bool visible = mode == VoiceMode::Recording || mode == VoiceMode::Processing;
     if (_voice_waveform) {
         _voice_waveform->setHidden(!visible);
@@ -597,6 +722,13 @@ void CodexView::setVoiceMode(VoiceMode mode)
 
 uint32_t CodexView::frameIntervalMs() const
 {
+    if (_action_touch_tracking || _action_wheel_active || _reasoning_touch_tracking ||
+        _native_agent_touch_tracking) {
+        return kActionWheelFrameMs;
+    }
+    if (_task_list_active) {
+        return 100;
+    }
     if (_theme_mode == ThemeMode::OpenWatcherV2) {
         return 100;
     }
@@ -612,6 +744,594 @@ bool CodexView::consumeClearInputRequest()
     }
     _clear_input_requested = false;
     return true;
+}
+
+int CodexView::consumeReasoningDeltaRequest()
+{
+    const int request = _reasoning_delta_request;
+    _reasoning_delta_request = 0;
+    return request;
+}
+
+bool CodexView::consumeNativeRadialRequest(float& angle, float& distance)
+{
+    if (!_native_radial_pending) {
+        return false;
+    }
+    angle = _native_radial_angle;
+    distance = _native_radial_distance;
+    _native_radial_pending = false;
+    return true;
+}
+
+void CodexView::initActionWheel()
+{
+    _action_wheel_canvas = std::make_unique<Container>(_panel->get());
+    _action_wheel_canvas->setSize(kScreenSize, kScreenSize);
+    _action_wheel_canvas->align(LV_ALIGN_CENTER, 0, 0);
+    _action_wheel_canvas->setBgColor(lv_color_hex(0x02050A));
+    _action_wheel_canvas->setBgOpa(248);
+    _action_wheel_canvas->setBorderWidth(0);
+    _action_wheel_canvas->setPaddingAll(0);
+    _action_wheel_canvas->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(_action_wheel_canvas->get(), &CodexView::drawActionWheelEvent,
+                        LV_EVENT_DRAW_MAIN_BEGIN, this);
+
+    static constexpr std::array<const char*, 4> kLabels = {
+        "UP", "RESERVED", "DOWN", "RESERVED"
+    };
+    static constexpr std::array<lv_align_t, 4> kAlign = {
+        LV_ALIGN_TOP_MID, LV_ALIGN_RIGHT_MID, LV_ALIGN_BOTTOM_MID, LV_ALIGN_LEFT_MID
+    };
+    static constexpr std::array<int, 4> kX = {0, -19, 0, 19};
+    static constexpr std::array<int, 4> kY = {92, 0, -92, 0};
+    for (size_t i = 0; i < _action_wheel_labels.size(); ++i) {
+        auto label = std::make_unique<Label>(_action_wheel_canvas->get());
+        label->setText(kLabels[i]);
+        label->setTextFont(&lv_font_montserrat_18);
+        label->setTextColor(lv_color_hex(kOwSoftText));
+        label->setWidth(92);
+        label->setTextAlign(LV_TEXT_ALIGN_CENTER);
+        label->align(kAlign[i], kX[i], kY[i]);
+        label->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+        _action_wheel_labels[i] = std::move(label);
+    }
+
+    _action_wheel_center = std::make_unique<Container>(_action_wheel_canvas->get());
+    _action_wheel_center->setSize(128, 128);
+    _action_wheel_center->align(LV_ALIGN_CENTER, 0, 0);
+    _action_wheel_center->setRadius(LV_RADIUS_CIRCLE);
+    _action_wheel_center->setBgColor(lv_color_hex(0x0B1624));
+    _action_wheel_center->setBgOpa(245);
+    _action_wheel_center->setBorderWidth(2);
+    _action_wheel_center->setBorderColor(lv_color_hex(0x29415F));
+    _action_wheel_center->setShadowWidth(14);
+    _action_wheel_center->setShadowColor(lv_color_hex(kOwBlue));
+    _action_wheel_center->setShadowOpa(35);
+    _action_wheel_center->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+
+    _action_wheel_center_label = std::make_unique<Label>(_action_wheel_center->get());
+    _action_wheel_center_label->setText("SLIDE\nUP / DOWN");
+    _action_wheel_center_label->setTextFont(&lv_font_montserrat_16);
+    _action_wheel_center_label->setTextColor(lv_color_hex(kColorText));
+    _action_wheel_center_label->setWidth(110);
+    _action_wheel_center_label->setTextAlign(LV_TEXT_ALIGN_CENTER);
+    _action_wheel_center_label->align(LV_ALIGN_CENTER, 0, 0);
+
+    setActionWheelVisible(false);
+}
+
+void CodexView::setActionWheelVisible(bool visible)
+{
+    if (!_action_wheel_canvas) {
+        return;
+    }
+    _action_wheel_active = visible;
+    _action_wheel_canvas->setHidden(!visible);
+    if (visible) {
+        _action_wheel_canvas->moveForeground();
+        updateActionWheelSelection(-1);
+        lv_obj_invalidate(_action_wheel_canvas->get());
+    }
+}
+
+void CodexView::updateActionWheelSelection(int selection)
+{
+    selection = (selection >= 0 && selection < 4) ? selection : -1;
+    if (_action_wheel_selection == selection) {
+        return;
+    }
+    _action_wheel_selection = selection;
+
+    static constexpr std::array<uint32_t, 4> kColors = {
+        kOwBlue, kOwStatusIdle, kOwTeal, kOwStatusIdle
+    };
+    for (size_t i = 0; i < _action_wheel_labels.size(); ++i) {
+        if (_action_wheel_labels[i]) {
+            _action_wheel_labels[i]->setTextColor(
+                lv_color_hex(static_cast<int>(i) == selection ? kColors[i] : kOwSoftText));
+        }
+    }
+    if (_action_wheel_center_label) {
+        static constexpr std::array<const char*, 4> kSelectedLabels = {
+            "ANALOG\nUP", "ANALOG\nRIGHT", "ANALOG\nDOWN", "ANALOG\nLEFT"
+        };
+        _action_wheel_center_label->setText(
+            selection >= 0 ? kSelectedLabels[selection] : "SLIDE\n4 WAYS");
+        _action_wheel_center_label->setTextColor(
+            lv_color_hex(selection >= 0 ? kColors[selection] : kColorText));
+    }
+    if (_action_wheel_canvas) {
+        lv_obj_invalidate(_action_wheel_canvas->get());
+    }
+}
+
+void CodexView::queueNativeRadial(float angle, float distance)
+{
+    _native_radial_angle = std::clamp(angle, 0.0f, 1.0f);
+    _native_radial_distance = std::clamp(distance, 0.0f, 1.0f);
+    _native_radial_pending = true;
+}
+
+void CodexView::resetNativeTouchControl(bool queueNeutral)
+{
+    const bool was_active = _action_wheel_active;
+    if (queueNeutral && (_action_wheel_active || _native_radial_distance > 0.0f)) {
+        queueNativeRadial(_native_radial_angle, 0.0f);
+    }
+    setActionWheelVisible(false);
+    _action_touch_tracking = false;
+    _action_touch_started_at = 0;
+    _action_touch_start_x = 0;
+    _action_touch_start_y = 0;
+    _native_control_axis = 0;
+    _last_native_radial_tick = 0;
+    updateActionWheelSelection(-1);
+    if (was_active) {
+        _suppress_pet_click_until_ms = GetHAL().millis() + 350;
+    }
+}
+
+void CodexView::updateActionWheelGesture()
+{
+    if (_task_list_active) {
+        return;
+    }
+    lv_indev_t* indev = GetHAL().lvTouchpad;
+    if (!indev) {
+        return;
+    }
+
+    const uint32_t now = GetHAL().millis();
+    const lv_indev_state_t state = lv_indev_get_state(indev);
+    lv_point_t point = {0, 0};
+    lv_indev_get_point(indev, &point);
+
+    if (state == LV_INDEV_STATE_PR) {
+        if (_native_control_blocked_until_release) {
+            return;
+        }
+        if (!_action_touch_tracking) {
+            if (_theme_mode == ThemeMode::OpenWatcherV2 &&
+                pointInsideNativeAgentRail(point.x, point.y)) {
+                return;
+            }
+            const int dx = point.x - kScreenCenter;
+            const int dy = point.y - kScreenCenter;
+            if (_voice_mode == VoiceMode::Idle &&
+                dx * dx + dy * dy <= kActionWheelStartRadius * kActionWheelStartRadius) {
+                _action_touch_tracking = true;
+                _action_touch_started_at = now;
+                _action_touch_start_x = point.x;
+                _action_touch_start_y = point.y;
+                _native_control_axis = 0;
+                // Stage one: confirm that the center target was acquired. The
+                // stronger vibration still occurs after the hold threshold.
+                GetHAL().vibrate(14, 35);
+            }
+            return;
+        }
+
+        const int touch_dx = point.x - _action_touch_start_x;
+        const int touch_dy = point.y - _action_touch_start_y;
+        if (!_action_wheel_active && now - _action_touch_started_at < kActionWheelHoldMs &&
+            touch_dx * touch_dx + touch_dy * touch_dy >
+                kNativeControlHoldSlop * kNativeControlHoldSlop) {
+            resetNativeTouchControl(false);
+            _native_control_blocked_until_release = true;
+            return;
+        }
+
+        if (!_action_wheel_active && now - _action_touch_started_at >= kActionWheelHoldMs) {
+            if (_theme_mode != ThemeMode::OpenWatcherV2) {
+                _suppress_pet_click_until_ms = now + 350;
+            }
+            setActionWheelVisible(true);
+            queueNativeRadial(_native_radial_angle, 0.0f);
+            _last_native_radial_tick = now;
+            GetHAL().vibrate(35, 80);
+            return;
+        }
+
+        if (_action_wheel_active) {
+            const int dx = point.x - _action_touch_start_x;
+            const int dy = point.y - _action_touch_start_y;
+            const int abs_x = std::abs(dx);
+            const int abs_y = std::abs(dy);
+            if (_native_control_axis == 0 &&
+                std::max(abs_x, abs_y) >= kNativeControlDeadZone) {
+                _native_control_axis = abs_y >= abs_x ? 1 : 2;
+            }
+
+            int selection = -1;
+            if (_native_control_axis == 1 && abs_y >= kNativeControlDeadZone) {
+                selection = dy < 0 ? 0 : 2;
+                const float scaled = clamp01(
+                    static_cast<float>(abs_y - kNativeControlDeadZone) /
+                    static_cast<float>(kNativeControlFullScale - kNativeControlDeadZone));
+                const float distance = 0.15f + 0.85f * scaled;
+                const float angle = dy < 0 ? 0.75f : 0.25f;
+                if (now - _last_native_radial_tick >= kNativeRadialFrameMs) {
+                    queueNativeRadial(angle, distance);
+                    _last_native_radial_tick = now;
+                }
+            } else if (_native_control_axis == 1 && _native_radial_distance > 0.0f) {
+                queueNativeRadial(_native_radial_angle, 0.0f);
+                _last_native_radial_tick = now;
+            } else if (_native_control_axis == 2 && abs_x >= kNativeControlDeadZone) {
+                selection = dx < 0 ? 3 : 1;
+                const float scaled = clamp01(
+                    static_cast<float>(abs_x - kNativeControlDeadZone) /
+                    static_cast<float>(kNativeControlFullScale - kNativeControlDeadZone));
+                const float distance = 0.15f + 0.85f * scaled;
+                const float angle = dx < 0 ? 0.5f : 0.0f;
+                if (now - _last_native_radial_tick >= kNativeRadialFrameMs) {
+                    queueNativeRadial(angle, distance);
+                    _last_native_radial_tick = now;
+                }
+            } else if (_native_control_axis == 2 && _native_radial_distance > 0.0f) {
+                queueNativeRadial(_native_radial_angle, 0.0f);
+                _last_native_radial_tick = now;
+            }
+            if (selection != _action_wheel_selection) {
+                updateActionWheelSelection(selection);
+                if (selection >= 0) {
+                    GetHAL().vibrate(18, 45);
+                }
+            }
+        }
+        return;
+    }
+
+    _native_control_blocked_until_release = false;
+
+    if (!_action_touch_tracking) {
+        return;
+    }
+    if (_action_wheel_active) {
+        GetHAL().vibrate(24, 55);
+    }
+    resetNativeTouchControl(true);
+}
+
+void CodexView::drawActionWheelEvent(lv_event_t* event)
+{
+    auto* view = static_cast<CodexView*>(lv_event_get_user_data(event));
+    if (view == nullptr || lv_event_get_code(event) != LV_EVENT_DRAW_MAIN_BEGIN) {
+        return;
+    }
+    lv_obj_t* obj = lv_event_get_target_obj(event);
+    lv_layer_t* layer = lv_event_get_layer(event);
+    lv_area_t coords;
+    lv_obj_get_coords(obj, &coords);
+    view->drawActionWheel(layer, coords);
+}
+
+void CodexView::drawActionWheel(lv_layer_t* layer, const lv_area_t& coords)
+{
+    static constexpr std::array<uint32_t, 4> kColors = {
+        kOwBlue, kOwStatusIdle, kOwTeal, kOwStatusIdle
+    };
+    static constexpr std::array<std::array<int, 2>, 4> kAngles = {{
+        {{238, 302}}, {{328, 32}}, {{58, 122}}, {{148, 212}}
+    }};
+
+    lv_draw_arc_dsc_t arc;
+    lv_draw_arc_dsc_init(&arc);
+    arc.center = {
+        static_cast<lv_coord_t>(coords.x1 + kScreenCenter),
+        static_cast<lv_coord_t>(coords.y1 + kScreenCenter),
+    };
+    arc.radius = 145;
+    arc.width = 58;
+    arc.rounded = 1;
+    for (size_t i = 0; i < kAngles.size(); ++i) {
+        arc.start_angle = kAngles[i][0];
+        arc.end_angle = kAngles[i][1];
+        arc.color = lv_color_hex(kColors[i]);
+        arc.opa = static_cast<int>(i) == _action_wheel_selection ? 245 : 72;
+        lv_draw_arc(layer, &arc);
+    }
+
+    arc.radius = 205;
+    arc.width = 2;
+    arc.start_angle = 0;
+    arc.end_angle = 360;
+    arc.color = lv_color_hex(0x29415F);
+    arc.opa = 150;
+    lv_draw_arc(layer, &arc);
+}
+
+void CodexView::initTaskList()
+{
+    _task_list_canvas = std::make_unique<Container>(_panel->get());
+    _task_list_canvas->setSize(kScreenSize, kScreenSize);
+    _task_list_canvas->align(LV_ALIGN_CENTER, 0, 0);
+    _task_list_canvas->setBgColor(lv_color_hex(0x02050A));
+    _task_list_canvas->setBgOpa(252);
+    _task_list_canvas->setBorderWidth(0);
+    _task_list_canvas->setPaddingAll(0);
+    _task_list_canvas->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+
+    _task_list_title = std::make_unique<Label>(_task_list_canvas->get());
+    _task_list_title->setText("UNREAD TASKS");
+    _task_list_title->setTextFont(&lv_font_montserrat_22);
+    _task_list_title->setTextColor(lv_color_hex(kOwBlue));
+    _task_list_title->setWidth(280);
+    _task_list_title->setTextAlign(LV_TEXT_ALIGN_CENTER);
+    _task_list_title->align(LV_ALIGN_TOP_MID, 0, 58);
+
+    for (size_t i = 0; i < _task_row_buttons.size(); ++i) {
+        auto row = std::make_unique<Container>(_task_list_canvas->get());
+        row->setSize(344, 42);
+        row->align(LV_ALIGN_TOP_MID, 0, 102 + static_cast<int>(i) * 48);
+        row->setRadius(15);
+        row->setBgColor(lv_color_hex(i == 0 ? 0x102B43 : kOwPanel));
+        row->setBgOpa(245);
+        row->setBorderWidth(1);
+        row->setBorderColor(lv_color_hex(i == 0 ? kOwBlue : 0x26374C));
+        row->setPaddingAll(0);
+        row->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+        row->onClick().connect([this, i]() {
+            if (i >= _unread_tasks.size()) {
+                return;
+            }
+            _task_open_request = _unread_tasks[i].id;
+            setTaskListVisible(false);
+            GetHAL().vibrate(45, 85);
+        });
+
+        auto label = std::make_unique<Label>(row->get());
+        label->setText("");
+#if CONFIG_LV_FONT_SOURCE_HAN_SANS_SC_16_CJK
+        label->setTextFont(&lv_font_source_han_sans_sc_16_cjk);
+#else
+        label->setTextFont(&lv_font_montserrat_16);
+#endif
+        label->setTextColor(lv_color_hex(kColorText));
+        label->setWidth(304);
+        label->setTextAlign(LV_TEXT_ALIGN_LEFT);
+        label->align(LV_ALIGN_LEFT_MID, 16, 0);
+        lv_label_set_long_mode(label->get(), LV_LABEL_LONG_MODE_DOTS);
+        label->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+        _task_row_buttons[i] = std::move(row);
+        _task_row_labels[i] = std::move(label);
+    }
+
+    _task_list_back_button = std::make_unique<Container>(_task_list_canvas->get());
+    _task_list_back_button->setSize(132, 38);
+    _task_list_back_button->align(LV_ALIGN_BOTTOM_MID, 0, -40);
+    _task_list_back_button->setRadius(19);
+    _task_list_back_button->setBgColor(lv_color_hex(0x121C29));
+    _task_list_back_button->setBgOpa(250);
+    _task_list_back_button->setBorderWidth(1);
+    _task_list_back_button->setBorderColor(lv_color_hex(0x39506B));
+    _task_list_back_button->setPaddingAll(0);
+    _task_list_back_button->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+    _task_list_back_button->onClick().connect([this]() {
+        setTaskListVisible(false);
+        GetHAL().vibrate(25, 55);
+    });
+
+    _task_list_back_label = std::make_unique<Label>(_task_list_back_button->get());
+    _task_list_back_label->setText("BACK");
+    _task_list_back_label->setTextFont(&lv_font_montserrat_16);
+    _task_list_back_label->setTextColor(lv_color_hex(kOwSoftText));
+    _task_list_back_label->align(LV_ALIGN_CENTER, 0, 0);
+
+    updateTaskListRows();
+    setTaskListVisible(false);
+}
+
+void CodexView::setTaskListVisible(bool visible)
+{
+    if (!_task_list_canvas) {
+        return;
+    }
+    _task_list_active = visible;
+    _task_list_canvas->setHidden(!visible);
+    if (visible) {
+        updateTaskListRows();
+        _task_list_canvas->moveForeground();
+    }
+}
+
+void CodexView::updateTaskListRows()
+{
+    for (size_t i = 0; i < _task_row_buttons.size(); ++i) {
+        if (!_task_row_buttons[i] || !_task_row_labels[i]) {
+            continue;
+        }
+        const bool available = i < _unread_tasks.size();
+        _task_row_buttons[i]->setHidden(!available);
+        if (!available) {
+            continue;
+        }
+        char prefix[8] = {};
+        std::snprintf(prefix, sizeof(prefix), "%u  ", static_cast<unsigned>(i + 1));
+        _task_row_labels[i]->setText((std::string(prefix) + _unread_tasks[i].title).c_str());
+    }
+}
+
+void CodexView::initReasoningControl()
+{
+    _reasoning_canvas = std::make_unique<Container>(_panel->get());
+    _reasoning_canvas->setSize(kScreenSize, kScreenSize);
+    _reasoning_canvas->align(LV_ALIGN_CENTER, 0, 0);
+    _reasoning_canvas->setBgOpa(LV_OPA_TRANSP);
+    _reasoning_canvas->setBorderWidth(0);
+    _reasoning_canvas->setPaddingAll(0);
+    _reasoning_canvas->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(_reasoning_canvas->get(), &CodexView::drawReasoningControlEvent,
+                        LV_EVENT_DRAW_MAIN_BEGIN, this);
+
+    _reasoning_panel = std::make_unique<Container>(_reasoning_canvas->get());
+    _reasoning_panel->setSize(250, 70);
+    _reasoning_panel->align(LV_ALIGN_TOP_MID, 0, 42);
+    _reasoning_panel->setRadius(24);
+    _reasoning_panel->setBgColor(lv_color_hex(0x09121D));
+    _reasoning_panel->setBgOpa(245);
+    _reasoning_panel->setBorderWidth(1);
+    _reasoning_panel->setBorderColor(lv_color_hex(0x304866));
+    _reasoning_panel->setPaddingAll(0);
+    _reasoning_panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+
+    _reasoning_label = std::make_unique<Label>(_reasoning_panel->get());
+    _reasoning_label->setText("REASONING\n<  --  >");
+    _reasoning_label->setTextFont(&lv_font_montserrat_16);
+    _reasoning_label->setTextColor(lv_color_hex(kColorText));
+    _reasoning_label->setWidth(224);
+    _reasoning_label->setTextAlign(LV_TEXT_ALIGN_CENTER);
+    _reasoning_label->align(LV_ALIGN_CENTER, 0, 1);
+
+    setReasoningControlVisible(false);
+}
+
+void CodexView::updateReasoningGesture()
+{
+    lv_indev_t* indev = GetHAL().lvTouchpad;
+    if (!indev || _task_list_active || _action_wheel_active) {
+        return;
+    }
+    const lv_indev_state_t state = lv_indev_get_state(indev);
+    lv_point_t point = {0, 0};
+    lv_indev_get_point(indev, &point);
+
+    if (state == LV_INDEV_STATE_PR) {
+        if (!_reasoning_touch_tracking) {
+            if (_voice_mode == VoiceMode::Idle &&
+                point.x >= kReasoningTouchMinX && point.x <= kReasoningTouchMaxX &&
+                point.y >= kReasoningTouchMinY && point.y <= kReasoningTouchMaxY) {
+                _reasoning_touch_tracking = true;
+                _reasoning_touch_start_x = point.x;
+                _reasoning_swipe_direction = 0;
+                _reasoning_swipe_step = 0;
+                setReasoningControlVisible(true);
+                GetHAL().vibrate(18, 40);
+            }
+            return;
+        }
+
+        const int dx = point.x - _reasoning_touch_start_x;
+        const int step = std::clamp(dx / kReasoningSwipeThreshold, -6, 6);
+        if (step != _reasoning_swipe_step) {
+            const int delta = step - _reasoning_swipe_step;
+            _reasoning_swipe_step = step;
+            _reasoning_swipe_direction = (step > 0) - (step < 0);
+            _reasoning_delta_request += delta;
+            updateReasoningControlLabel();
+            if (delta != 0) {
+                GetHAL().vibrate(25, 55);
+            }
+        }
+        return;
+    }
+
+    if (!_reasoning_touch_tracking) {
+        return;
+    }
+    setReasoningControlVisible(false);
+    _reasoning_touch_tracking = false;
+    _reasoning_touch_start_x = 0;
+    _reasoning_swipe_direction = 0;
+    _reasoning_swipe_step = 0;
+}
+
+void CodexView::setReasoningControlVisible(bool visible)
+{
+    if (!_reasoning_canvas) {
+        return;
+    }
+    _reasoning_canvas->setHidden(!visible);
+    if (visible) {
+        updateReasoningControlLabel();
+        _reasoning_canvas->moveForeground();
+        lv_obj_invalidate(_reasoning_canvas->get());
+    }
+}
+
+void CodexView::updateReasoningControlLabel()
+{
+    if (!_reasoning_label) {
+        return;
+    }
+    if (_reasoning_swipe_direction < 0) {
+        const std::string step = std::to_string(std::abs(_reasoning_swipe_step));
+        _reasoning_label->setText(("REASONING\n<  LOWER -" + step).c_str());
+        _reasoning_label->setTextColor(lv_color_hex(kOwAmber));
+    } else if (_reasoning_swipe_direction > 0) {
+        const std::string step = std::to_string(_reasoning_swipe_step);
+        _reasoning_label->setText(("REASONING\nHIGHER +" + step + "  >").c_str());
+        _reasoning_label->setTextColor(lv_color_hex(0x9A7BFF));
+    } else {
+        std::string label = _state.reasoningLabel.empty() ? "--" : _state.reasoningLabel;
+        std::transform(label.begin(), label.end(), label.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::toupper(ch));
+        });
+        _reasoning_label->setText(("REASONING\n<  " + label + "  >").c_str());
+        _reasoning_label->setTextColor(lv_color_hex(kColorText));
+    }
+    if (_reasoning_canvas) {
+        lv_obj_invalidate(_reasoning_canvas->get());
+    }
+}
+
+void CodexView::drawReasoningControlEvent(lv_event_t* event)
+{
+    auto* view = static_cast<CodexView*>(lv_event_get_user_data(event));
+    if (!view || lv_event_get_code(event) != LV_EVENT_DRAW_MAIN_BEGIN) {
+        return;
+    }
+    lv_obj_t* obj = lv_event_get_target_obj(event);
+    lv_layer_t* layer = lv_event_get_layer(event);
+    lv_area_t coords;
+    lv_obj_get_coords(obj, &coords);
+    view->drawReasoningControl(layer, coords);
+}
+
+void CodexView::drawReasoningControl(lv_layer_t* layer, const lv_area_t& coords)
+{
+    lv_draw_arc_dsc_t arc;
+    lv_draw_arc_dsc_init(&arc);
+    arc.center = {
+        static_cast<lv_coord_t>(coords.x1 + kScreenCenter),
+        static_cast<lv_coord_t>(coords.y1 + kScreenCenter),
+    };
+    arc.radius = 216;
+    arc.width = 9;
+    arc.rounded = 1;
+
+    arc.start_angle = 225;
+    arc.end_angle = 270;
+    arc.color = lv_color_hex(kOwBlue);
+    arc.opa = _reasoning_swipe_direction < 0 ? 250 : 90;
+    lv_draw_arc(layer, &arc);
+
+    arc.start_angle = 270;
+    arc.end_angle = 315;
+    arc.color = lv_color_hex(0x9A7BFF);
+    arc.opa = _reasoning_swipe_direction > 0 ? 250 : 90;
+    lv_draw_arc(layer, &arc);
 }
 
 void CodexView::initFlipClock()
@@ -860,7 +1580,7 @@ void CodexView::initOpenWatcherV2()
     lv_obj_add_event_cb(_v2_canvas->get(), &CodexView::drawOpenWatcherV2Event, LV_EVENT_DRAW_MAIN_BEGIN, this);
 
     _v2_title_label = std::make_unique<Label>(_panel->get());
-    _v2_title_label->setText("Codex Ready");
+    _v2_title_label->setText("Codex Offline");
     _v2_title_label->setTextFont(&lv_font_montserrat_24);
     _v2_title_label->setTextColor(lv_color_hex(kOwBlue));
     _v2_title_label->setWidth(280);
@@ -962,6 +1682,40 @@ void CodexView::initOpenWatcherV2()
     _v2_sync_dot->setBgColor(lv_color_hex(0xC9FF53));
     _v2_sync_dot->setBgOpa(LV_OPA_COVER);
     _v2_sync_dot->setBorderWidth(0);
+
+    for (size_t index = 0; index < _v2_agent_hits.size(); ++index) {
+        auto hit = std::make_unique<Container>(_panel->get());
+        hit->setSize(kNativeAgentHitSize, kNativeAgentHitSize);
+        hit->align(LV_ALIGN_TOP_LEFT,
+                   kNativeAgentCenters[index].x - kNativeAgentHitHalf,
+                   kNativeAgentCenters[index].y - kNativeAgentHitHalf);
+        hit->setBgOpa(LV_OPA_TRANSP);
+        hit->setBorderWidth(0);
+        hit->setPaddingAll(0);
+        hit->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+        hit->addFlag(LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(hit->get(),
+                            &CodexView::nativeAgentTouchEvent,
+                            LV_EVENT_ALL,
+                            this);
+
+        auto dot = std::make_unique<Container>(hit->get());
+        dot->setSize(10, 10);
+        dot->align(LV_ALIGN_CENTER, 0, 0);
+        dot->setRadius(LV_RADIUS_CIRCLE);
+        dot->setBgColor(lv_color_hex(kOwTrack));
+        dot->setBgOpa(85);
+        dot->setBorderWidth(1);
+        dot->setBorderColor(lv_color_hex(0x42546A));
+        lv_obj_set_style_border_opa(dot->get(), 120, LV_PART_MAIN);
+        dot->setPaddingAll(0);
+        dot->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+        dot->removeFlag(LV_OBJ_FLAG_CLICKABLE);
+
+        _v2_agent_hits[index] = std::move(hit);
+        _v2_agent_dots[index] = std::move(dot);
+    }
+    updateNativeAgentRail(true);
 }
 
 void CodexView::updateOpenWatcherV2Labels()
@@ -972,26 +1726,13 @@ void CodexView::updateOpenWatcherV2Labels()
 
     const int week_pct = static_cast<int>(std::lround(remainingRatio(_state.weekly) * 100.0f));
     if (_v2_title_label) {
-        std::string title = _state.sessionTitle;
-        uint32_t color = kOwStatusIdle;
-        if (_state.unreadStateValid) {
-            if (_state.unreadTaskCount <= 0) {
-                title = "Codex Clear";
-                color = kOwBlue;
-            } else {
-                const std::string count = _state.unreadTaskCount > 9
-                                              ? "9+"
-                                              : std::to_string(_state.unreadTaskCount);
-                title = "Codex " + count + " Unread";
-                if (_state.unreadTaskCount == 1) {
-                    color = kOwAmber;
-                } else if (_state.unreadTaskCount == 2) {
-                    color = kOwToday;
-                } else {
-                    color = kOwAlert;
-                }
-            }
-        }
+        const bool link_present = _native_agents_ready || _state.bleConnected;
+        const char* title = _native_codex_communicating
+                                ? "Codex Ready"
+                                : (link_present ? "Codex Linking" : "Codex Offline");
+        const uint32_t color = _native_codex_communicating
+                                   ? kOwBlue
+                                   : (link_present ? kOwAmber : kOwStatusIdle);
         setLabelTextIfChanged(*_v2_title_label, title);
         _v2_title_label->setTextColor(lv_color_hex(color));
     }
@@ -1035,6 +1776,218 @@ void CodexView::updateOpenWatcherV2Labels()
             _v2_meta_right_label->setText(activity.c_str());
             _v2_meta_right_label->setTextColor(lv_color_hex(_state.activityLive ? kOwGreen : kOwSoftText));
         }
+    }
+}
+
+void CodexView::updateNativeAgentRail(bool force)
+{
+    if (_theme_mode != ThemeMode::OpenWatcherV2) {
+        return;
+    }
+    const uint32_t now = GetHAL().millis();
+    bool has_animation = false;
+    for (const auto& agent : _native_agents) {
+        has_animation = has_animation ||
+                        (_native_agents_ready && agent.assigned &&
+                         (agent.effect == 4 || agent.effect == 6));
+    }
+    if (!force && (!has_animation || now - _last_native_agent_anim_tick < 250)) {
+        return;
+    }
+    _last_native_agent_anim_tick = now;
+
+    for (size_t index = 0; index < _v2_agent_dots.size(); ++index) {
+        if (!_v2_agent_dots[index]) {
+            continue;
+        }
+        const auto& agent = _native_agents[index];
+        const bool active = _native_agents_ready && agent.assigned;
+        const bool preview = _native_agent_touch_tracking &&
+                             _native_agent_touch_candidate == static_cast<int>(index);
+        uint32_t color = active && agent.color != 0 ? agent.color : kOwTrack;
+        int size = active ? 14 : 10;
+        int opacity = active
+                          ? static_cast<int>(std::lround(175.0f + 80.0f * clamp01(agent.brightness)))
+                          : 72;
+        if (active && (agent.effect == 4 || agent.effect == 6)) {
+            const float period_ms = 2800.0f - 1600.0f * clamp01(agent.speed);
+            const float phase = static_cast<float>(now % static_cast<uint32_t>(period_ms)) /
+                                period_ms;
+            const float pulse = 0.5f + 0.5f * std::sin(phase * 6.28318530718f);
+            if (agent.effect == 4) {
+                size = 13 + static_cast<int>(std::lround(4.0f * pulse));
+                opacity = 120 + static_cast<int>(std::lround(135.0f * pulse));
+            } else {
+                size = 14 + static_cast<int>(std::lround(2.0f * pulse));
+                opacity = 185 + static_cast<int>(std::lround(70.0f * pulse));
+            }
+            opacity = static_cast<int>(std::lround(opacity *
+                                                   (0.45f + 0.55f * clamp01(agent.brightness))));
+        }
+        if (preview) {
+            const uint32_t elapsed = GetHAL().millis() - _native_agent_touch_started_at;
+            const float progress = _native_agent_touch_committed
+                                       ? 1.0f
+                                       : clamp01(static_cast<float>(elapsed) /
+                                                 static_cast<float>(kNativeAgentHoldMs));
+            size = 18 + static_cast<int>(std::lround(8.0f * progress));
+            opacity = 255;
+            color = active && agent.color != 0 ? agent.color : kOwBlue;
+        }
+        opacity = std::clamp(opacity, 40, 255);
+
+        auto& dot = *_v2_agent_dots[index];
+        if (force || _native_agent_dot_sizes[index] != size) {
+            dot.setSize(size, size);
+            dot.align(LV_ALIGN_CENTER, 0, 0);
+            _native_agent_dot_sizes[index] = size;
+        }
+        if (force || _native_agent_dot_colors[index] != color) {
+            dot.setBgColor(lv_color_hex(color));
+            dot.setBorderColor(lv_color_hex(active ? blendRgb(color, 0xFFFFFF, 0.35f)
+                                                   : 0x42546A));
+            dot.setShadowColor(lv_color_hex(color));
+            _native_agent_dot_colors[index] = color;
+        }
+        if (force || _native_agent_dot_opacities[index] != opacity) {
+            dot.setBgOpa(opacity);
+            lv_obj_set_style_border_opa(dot.get(),
+                                        active ? std::min(255, opacity + 20) : 100,
+                                        LV_PART_MAIN);
+            dot.setShadowWidth(preview ? 16 : (active ? 8 : 0));
+            dot.setShadowOpa(preview ? 145 : (active ? std::max(25, opacity / 4) : 0));
+            _native_agent_dot_opacities[index] = opacity;
+        }
+    }
+}
+
+int CodexView::nativeAgentTargetAt(int x, int y) const
+{
+    if (_native_agent_touch_candidate >= 0 &&
+        _native_agent_touch_candidate < static_cast<int>(kNativeAgentCenters.size())) {
+        const auto& current = kNativeAgentCenters[static_cast<size_t>(_native_agent_touch_candidate)];
+        const int retained_half = kNativeAgentHitHalf + kNativeAgentSwitchHysteresis;
+        if (std::abs(x - current.x) <= retained_half &&
+            std::abs(y - current.y) <= retained_half) {
+            return _native_agent_touch_candidate;
+        }
+    }
+
+    int nearest = -1;
+    int nearest_distance = INT_MAX;
+    for (size_t index = 0; index < kNativeAgentCenters.size(); ++index) {
+        const auto& center = kNativeAgentCenters[index];
+        const int dx = x - center.x;
+        const int dy = y - center.y;
+        if (std::abs(dx) > kNativeAgentHitHalf || std::abs(dy) > kNativeAgentHitHalf) {
+            continue;
+        }
+        const int distance = dx * dx + dy * dy;
+        if (distance < nearest_distance) {
+            nearest = static_cast<int>(index);
+            nearest_distance = distance;
+        }
+    }
+    return nearest;
+}
+
+void CodexView::resetNativeAgentTouch()
+{
+    const bool was_tracking = _native_agent_touch_tracking;
+    _native_agent_touch_tracking = false;
+    _native_agent_touch_candidate = -1;
+    _native_agent_touch_started_at = 0;
+    _native_agent_touch_last_visual_tick = 0;
+    _native_agent_touch_committed = false;
+    if (was_tracking) {
+        updateNativeAgentRail(true);
+    }
+}
+
+void CodexView::nativeAgentTouchEvent(lv_event_t* event)
+{
+    auto* view = static_cast<CodexView*>(lv_event_get_user_data(event));
+    if (!view || view->_theme_mode != ThemeMode::OpenWatcherV2) {
+        return;
+    }
+
+    const lv_event_code_t code = lv_event_get_code(event);
+    if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+        view->resetNativeAgentTouch();
+        return;
+    }
+    if (code != LV_EVENT_PRESSED && code != LV_EVENT_PRESSING) {
+        return;
+    }
+    if (view->_voice_mode != VoiceMode::Idle || view->_task_list_active ||
+        view->_action_wheel_active || view->_reasoning_touch_tracking) {
+        return;
+    }
+
+    lv_indev_t* indev = GetHAL().lvTouchpad;
+    if (!indev) {
+        return;
+    }
+    lv_point_t point = {0, 0};
+    lv_indev_get_point(indev, &point);
+    const uint32_t now = GetHAL().millis();
+    const int candidate = view->nativeAgentTargetAt(point.x, point.y);
+
+    if (code == LV_EVENT_PRESSED) {
+        if (candidate < 0) {
+            return;
+        }
+        view->_native_agent_touch_tracking = true;
+        view->_native_agent_touch_candidate = candidate;
+        view->_native_agent_touch_started_at = now;
+        view->_native_agent_touch_last_visual_tick = now;
+        view->_native_agent_touch_committed = false;
+        GetHAL().vibrate(14, 35);
+        view->updateNativeAgentRail(true);
+        return;
+    }
+
+    if (!view->_native_agent_touch_tracking) {
+        return;
+    }
+    if (candidate != view->_native_agent_touch_candidate) {
+        view->_native_agent_touch_candidate = candidate;
+        view->_native_agent_touch_started_at = now;
+        view->_native_agent_touch_last_visual_tick = now;
+        view->_native_agent_touch_committed = false;
+        if (candidate >= 0) {
+            GetHAL().vibrate(12, 30);
+        }
+        view->updateNativeAgentRail(true);
+        return;
+    }
+    if (candidate < 0) {
+        return;
+    }
+
+    if (!view->_native_agent_touch_committed &&
+        now - view->_native_agent_touch_started_at >= kNativeAgentHoldMs) {
+        view->_native_agent_touch_committed = true;
+        const size_t index = static_cast<size_t>(candidate);
+        // A slot's light state can be temporarily unassigned after reconnect
+        // even though the native Codex Micro HID channel is usable. Queue the
+        // physical Agent action unconditionally; the transport layer performs
+        // the authoritative ready/online check and reports failure to the UI.
+        if (index < view->_native_agents.size()) {
+            view->_native_agent_slot_request = candidate;
+            GetHAL().vibrate(35, 75);
+        } else {
+            view->setMessage("AGENT INVALID", 1000);
+            GetHAL().vibrate(20, 45);
+        }
+        view->updateNativeAgentRail(true);
+        return;
+    }
+
+    if (!view->_native_agent_touch_committed &&
+        now - view->_native_agent_touch_last_visual_tick >= kNativeAgentPreviewFrameMs) {
+        view->_native_agent_touch_last_visual_tick = now;
+        view->updateNativeAgentRail(true);
     }
 }
 
@@ -1132,15 +2085,20 @@ void CodexView::drawOpenWatcherV2(lv_layer_t* layer, const lv_area_t& coords)
     rect.border_width = 0;
     lv_draw_rect(layer, &rect, &today_dot);
 
-    auto draw_divider = [&](int y) {
+    auto draw_divider = [&](int y, bool agent_rail) {
+        if (agent_rail) {
+            draw_line(44, y, 148, y, 0x314052, 1, 210);
+            draw_line(318, y, 422, y, 0x314052, 1, 210);
+            return;
+        }
         draw_line(44, y, 204, y, 0x314052, 1, 210);
         draw_line(262, y, 422, y, 0x314052, 1, 210);
         draw_line(218, y, 227, y, 0x596CFF, 2, 245);
         draw_line(232, y, 241, y, 0x596CFF, 2, 245);
         draw_line(246, y, 255, y, 0x596CFF, 2, 245);
     };
-    draw_divider(222);
-    draw_divider(340);
+    draw_divider(222, false);
+    draw_divider(340, false);
 
     constexpr int kCells = 24;
     constexpr int kCellSize = 24;
@@ -1181,8 +2139,12 @@ void CodexView::initPet()
     _pet_hit_area->setBorderWidth(0);
     _pet_hit_area->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
     _pet_hit_area->onClick().connect([this]() {
+        const uint32_t now = GetHAL().millis();
+        if (static_cast<int32_t>(_suppress_pet_click_until_ms - now) > 0) {
+            return;
+        }
         _pet_pressed = true;
-        setMessageImage(pick_touch_asset(++_message_phrase_counter + GetHAL().millis()), 2200);
+        setMessageImage(pick_touch_asset(++_message_phrase_counter + now), 2200);
         GetHAL().vibrate(30, 80);
     });
 

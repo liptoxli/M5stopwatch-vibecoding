@@ -7,6 +7,7 @@
 #include <apps/common/status_bar/status_bar.h>
 #include <assets/assets.h>
 #include <hal/ble_bridge.h>
+#include <hal/codex_micro_hid.h>
 #include <hal/hal.h>
 #include <hal/utils/settings/settings.h>
 #include <mooncake.h>
@@ -56,6 +57,8 @@ void AppCodex::onOpen()
     // screen, and that latched fault must not be mistaken for an old update.
     _applied_host_voice_sequence = 0;
     _applied_host_unread_sequence = 0;
+    _applied_host_tasks_sequence = 0;
+    _applied_native_status_sequence = 0;
     _applied_host_panel_sequence = ble_bridge::host_panel_sequence();
     _applied_ble_connected = ble_bridge::is_connected();
     _voice_active = false;
@@ -92,6 +95,7 @@ void AppCodex::onRunning()
     }
 
     handleBluetoothKeys();
+    handleTouchControls();
     const uint32_t now = GetHAL().millis();
     if (ble_bridge::voice_session_interrupted()) {
         enterVoiceInterrupted(now);
@@ -178,11 +182,18 @@ void AppCodex::onRunning()
     const uint32_t host_unread_sequence = ble_bridge::host_codex_unread_sequence();
     const bool unread_changed = ble_bridge::host_codex_unread_valid() &&
                                 host_unread_sequence != _applied_host_unread_sequence;
+    const uint32_t host_tasks_sequence = ble_bridge::host_codex_tasks_sequence();
+    const bool tasks_changed = ble_bridge::host_codex_tasks_valid() &&
+                               host_tasks_sequence != _applied_host_tasks_sequence;
+    const auto native_status = codex_micro_hid::status_snapshot();
+    const bool native_status_changed =
+        native_status.sequence != _applied_native_status_sequence;
     const uint32_t frame_ms = _view ? _view->frameIntervalMs() : 100;
     const bool view_due = _view && now - _last_view_update_ms >= frame_ms;
     const bool status_bar_due = now - _last_status_bar_update_ms >= kStatusBarFrameMs;
 
-    if (!quota_changed && !ble_changed && !voice_changed && !unread_changed && !view_due && !status_bar_due) {
+    if (!quota_changed && !ble_changed && !voice_changed && !unread_changed &&
+        !tasks_changed && !native_status_changed && !view_due && !status_bar_due) {
         return;
     }
 
@@ -214,6 +225,32 @@ void AppCodex::onRunning()
         if (unread_changed) {
             _view->setUnreadTaskCount(ble_bridge::host_codex_unread_count());
             _applied_host_unread_sequence = host_unread_sequence;
+            view_state_changed = true;
+        }
+        if (tasks_changed) {
+            std::vector<view::CodexView::TaskItem> tasks;
+            for (const auto& task : ble_bridge::host_codex_tasks()) {
+                tasks.push_back({task.id, task.title});
+            }
+            _view->setUnreadTasks(tasks);
+            _applied_host_tasks_sequence = host_tasks_sequence;
+            view_state_changed = true;
+        }
+        if (native_status_changed) {
+            std::array<view::CodexView::NativeAgentState, 4> agents = {};
+            for (size_t index = 0; index < agents.size(); ++index) {
+                const auto& source = native_status.agents[index];
+                auto& target = agents[index];
+                target.assigned = source.assigned;
+                target.color = source.color;
+                target.brightness = source.brightness;
+                target.effect = source.effect;
+                target.speed = source.speed;
+            }
+            _view->setNativeAgentStates(native_status.ready,
+                                        native_status.communicating,
+                                        agents);
+            _applied_native_status_sequence = native_status.sequence;
             view_state_changed = true;
         }
 
@@ -395,6 +432,51 @@ void AppCodex::handleBluetoothKeys()
     }
 }
 
+void AppCodex::handleTouchControls()
+{
+    if (!_view) {
+        return;
+    }
+    const int native_agent_slot = _view->consumeNativeAgentSlotRequest();
+    if (native_agent_slot >= 0) {
+        mclog::tagInfo(getAppInfo().name,
+                       "Native Codex Micro agent tap: slot {}",
+                       native_agent_slot);
+        if (!codex_micro_hid::tap_agent_slot(static_cast<uint8_t>(native_agent_slot))) {
+            LvglLockGuard lock;
+            _view->showActionMessage("CODEX MICRO OFFLINE");
+        }
+    }
+    const std::string task_id = _view->consumeTaskOpenRequest();
+    if (!task_id.empty()) {
+        mclog::tagInfo(getAppInfo().name, "Touch task list: open {}", task_id);
+        ble_bridge::request_open_codex_task(task_id);
+    }
+
+    const int reasoning_delta = _view->consumeReasoningDeltaRequest();
+    if (reasoning_delta != 0) {
+        mclog::tagInfo(getAppInfo().name,
+                       "Native Codex Micro reasoning swipe: {} step(s)",
+                       reasoning_delta);
+        if (!ble_bridge::request_codex_reasoning_delta(reasoning_delta)) {
+            LvglLockGuard lock;
+            _view->showActionMessage("CODEX MICRO OFFLINE");
+        }
+    }
+
+    float radial_angle = 0.0f;
+    float radial_distance = 0.0f;
+    if (_view->consumeNativeRadialRequest(radial_angle, radial_distance)) {
+        if (!codex_micro_hid::send_radial(radial_angle, radial_distance) &&
+            radial_distance > 0.0f) {
+            LvglLockGuard lock;
+            _view->showActionMessage(ble_bridge::is_connected()
+                                         ? "CODEX MICRO LINKING"
+                                         : "CODEX MICRO OFFLINE");
+        }
+    }
+}
+
 void AppCodex::onClose()
 {
     mclog::tagInfo(getAppInfo().name, "on close");
@@ -402,6 +484,7 @@ void AppCodex::onClose()
     if (_voice_active || _confirm_routes_to_primary) {
         ble_bridge::send_typeless_option(ble_bridge::ButtonAction::Up);
     }
+    codex_micro_hid::send_radial(0.75f, 0.0f);
     ble_bridge::set_voice_capture_active(false);
     _key_manager.reset();
     _voice_active = false;

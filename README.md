@@ -5,8 +5,8 @@
 </p>
 
 <p align="center">
-  <img alt="Firmware v0.9.2" src="https://img.shields.io/badge/firmware-v0.9.2-6f5cff">
-  <img alt="Bridge v1.2.0" src="https://img.shields.io/badge/macOS%20Bridge-v1.2.0-35b8ff">
+  <img alt="Firmware v0.10.0" src="https://img.shields.io/badge/firmware-v0.10.0-6f5cff">
+  <img alt="Bridge v1.3.0" src="https://img.shields.io/badge/macOS%20Bridge-v1.3.0-35b8ff">
   <img alt="ESP32-S3" src="https://img.shields.io/badge/hardware-ESP32--S3-ef6c35">
   <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-55f36a">
 </p>
@@ -15,26 +15,30 @@
   <img alt="OpenWatcher V2 界面" src="docs/assets/openwatcher-v2-ui.svg" width="520">
 </p>
 
-M5 StopWatch for Vibe Coding 为 Codex、ChatGPT、Claude Code 和 IDE 工作流增加了一层独立的物理交互：按下实体键开始讲话，StopWatch 麦克风通过 BLE 实时传到 Mac，再由系统输入设备 `M5 StopWatch Mic` 交给 Typeless 等语音输入应用。屏幕同时显示 Codex 周额度、当天用量、最近四小时的使用强度、未读任务和连接状态。
+M5 StopWatch for Vibe Coding 为 Codex、ChatGPT、Claude Code 和 IDE 工作流增加了一层独立的物理交互：按下实体键开始讲话，StopWatch 麦克风通过 BLE 实时传到 Mac，再由系统输入设备 `M5 StopWatch Mic` 交给 Typeless 等语音输入应用。屏幕同时显示 Codex 周额度、当天用量、最近四小时的使用强度、Agent 工作/未读/异常状态和连接状态。
 
 它不是录音机，也不会先生成 WAV 文件。语音以 16 kHz IMA-ADPCM 实时流传输，停止讲话后即可进入识别和发送流程。
 
 ## 项目现状
 
-当前版本为 **固件 v0.9.2 / macOS Bridge v1.2.0**，核心链路已经在真实设备上完成日常使用验证。
+当前版本为 **固件 v0.10.0 / macOS Bridge v1.3.0**。语音输入、虚拟麦克风、BLE HID、原生 Codex Micro 兼容交互和圆屏触摸均已在真实设备上完成端到端验证。
 
 | 能力 | 当前状态 |
 | --- | --- |
 | StopWatch 麦克风 → BLE → Mac 虚拟麦克风 → Typeless | 已完成，支持实时语音输入 |
 | A/B 实体键、长按、摇晃操作 | 已完成，按键由设备通过 BLE HID 直接发送 |
+| Codex Micro 原生 BLE HID 兼容层 | 已完成，Agent、推理等级和四向 Radial 事件走原生 Vendor HID 通道 |
+| 下沿四个 Agent 触摸点 | 已完成，支持两段式长按确认、状态颜色、动画和防误触 |
+| 顶部推理等级滑动 | 已完成，向左降低、向右提高，优先走原生通道并提供 Bridge 恢复路径 |
+| 中心四向触摸控制 | 已完成，长按进入，随后可向上、下、左、右输出连续 Radial 事件 |
 | Codex 周额度、当天消耗和重置倒计时 | 已完成，由 Mac Bridge 本地读取并推送摘要 |
-| Codex 未读任务提醒 | 已完成，标题和颜色随未读数量变化 |
+| Codex 状态反馈 | 已完成，顶部只表示通讯状态，四个 Agent 点显示槽位颜色、亮度和动态效果 |
 | 最近四小时使用强度 | 已完成，24 格滚动窗口，每格 10 分钟 |
 | Classic / Pet 与 OpenWatcher V2 两套 UI | 已完成，可在设备中切换 |
 | 断线与音频异常处理 | 已完成，异常时结束本次听写并提示重新录制 |
 | 省电、息屏和自动关机 | 已完成，日常混合使用约为 5 小时级 |
 
-当前版本适合实机体验、二次开发和日常语音输入。电量百分比仍以电池电压估算，低电量区会偏保守；因此页面中的续航数字是实测范围，不是实验室标称值。
+当前版本适合实机体验、二次开发和日常语音输入。电量百分比仍以电池电压估算，低电量区会偏保守；因此页面中的续航数字是实测范围，不是实验室标称值。首次从 v0.9.x 升级到 v0.10.0 时，由于 HID 描述符发生变化，需要在 macOS 中忽略旧的 `M5Codex-*` 并重新配对一次。
 
 ## 两套界面
 
@@ -60,8 +64,32 @@ OpenWatcher V2 的界面方向参考了 [OpenWatcher](https://github.com/openwat
 - 顶部半圆进度条使用具有语义的渐变色：剩余额度越充足越接近绿色，额度紧张时逐步转为黄色、橙色和红色。
 - 中央只突出“剩余百分比”，左侧单独显示当天已使用量，避免“已用”和“剩余”同时占据视觉中心。
 - 24 个方格覆盖最近四小时，每格代表 10 分钟；颜色深浅由实际录音时长和启动频率共同决定。
-- 标题同时承担 Codex 通知作用：无未读为蓝色，1 个为黄色、2 个为橙色、3 个及以上为红色。
+- 顶部 `Codex Ready / Linking / Offline` 只表达设备与 Codex 原生通道是否正常通讯，不再混入任务数量。
+- 下沿四个 Agent 点对应四个 Codex Agent 槽位；颜色、亮度和呼吸效果由 Mac 端原生状态返回，点位同时也是触摸入口。
 - 静态区域按变化更新，录音波形限制刷新频率，兼顾实体按键响应、界面流畅度和功耗。
+
+## v0.10.0：从状态屏到 Codex 物理控制器
+
+本版本把 StopWatch 已有的 BLE 键盘、麦克风和圆形触摸屏整合为一套 Codex Micro 兼容交互，同时保留原来的语音输入与两套 UI。
+
+### 四个 Agent 快捷入口
+
+- 四个点沿屏幕下半圆排列，对应原生槽位 `AG00` 至 `AG03`。
+- 可见圆点保持克制，但每个点背后都有 `84 × 84 px` 的透明触摸区。
+- 手指落下时先轻振并放大预览；保持约 `480 ms` 后再次强振并真正切换。
+- 提前松手不会发送；按住时滑向相邻点位会重新锁定目标并重新计时。
+- 槽位是否已经返回灯效只影响显示，不再错误阻止按键发送；真正的在线状态由 HID 传输层统一判断。
+
+### 推理等级和中心四向控制
+
+- 触摸顶部区域并左右滑动：每移动约 `44 px` 改变一级推理强度，单次手势最多六级。
+- 中心半径 `72 px` 内长按约 `480 ms` 后进入四向控制，移动超过 `24 px` 开始输出 Radial 距离。
+- 四向角度与 Codex Micro 协议一致：右 `0.00`、下 `0.25`、左 `0.50`、上 `0.75`；松手发送距离 `0` 作为归中。
+- 原生 Vendor HID 是主路径；Bridge 会在蓝牙重连时辅助恢复 Report 订阅，并在原生推理通道暂时不可用时提供受控的本机回退。
+
+### 一条 BLE 连接承载三类能力
+
+固件使用一个统一 HOGP 服务同时提供标准键盘 Report、Consumer Report 和 Codex Vendor Report，避免 macOS 只暴露第一个 HID 服务的问题。语音仍由同一 BLE 外设上的自定义麦克风服务传输，状态、额度和 Bridge 控制则使用原有 Companion 服务。三个通道相互独立：Bridge 退出时标准按键仍可用；麦克风关闭时 Codex Agent 控制仍可用。
 
 ## 为什么适合语音驱动的 Coding 工作流
 
@@ -100,7 +128,9 @@ Bridge 支持 Typeless 和微信输入法两种输入路径，也可以配合任
 - 16 kHz、20 ms 分帧、4-bit IMA-ADPCM 的实时 BLE 音频。
 - macOS 菜单栏 Bridge 与 `M5 StopWatch Mic` Core Audio 输入设备。
 - BLE HID 实体按键、长按确认和摇晃清除。
-- Codex 周额度、当天使用量、重置倒计时和未读任务状态。
+- 兼容 Codex Micro 的统一 BLE HID：四个 Agent 槽位、推理等级 Encoder 和四向 Radial 输入。
+- 圆屏两段式触摸确认：第一次触碰反馈、持续按住后提交，降低小屏误触。
+- Codex 周额度、当天使用量、重置倒计时和四个原生 Agent 槽位状态。
 - 最近四小时的设备使用强度热力图。
 - Typeless 录音、处理、空闲和异常状态反馈。
 - BLE 自动重连、音频输出自恢复和明确的录音中断提示。
@@ -113,11 +143,26 @@ Bridge 支持 Typeless 和微信输入法两种输入路径，也可以配合任
 - [Codex 额度机制](docs/QUOTA.md)
 - [隐私与安全](docs/SECURITY_AND_PRIVACY.md)
 - [Pet 自定义](docs/PET_CUSTOMIZATION.md)
+- [Agent 与二次开发指南](docs/AGENT_DEVELOPMENT_GUIDE.md)
+
+## 为 Agent 和二次开发准备的说明书
+
+为了方便大家使用 Codex 或其他代码 Agent 进行二次开发，本仓库已经提供两份专门说明：
+
+- 根目录 [AGENTS.md](AGENTS.md)：让支持仓库指令的代码 Agent 进入项目后，立即知道构建命令、代码边界、隐私要求和验收规则。
+- [Agent 与二次开发指南](docs/AGENT_DEVELOPMENT_GUIDE.md)：逐模块说明功能、入口文件、数据流、交互参数、BLE 协议、修改方法、刷机步骤和回归检查。
+
+推荐把下面这句话直接交给你的代码 Agent：
+
+> 请先阅读 `AGENTS.md` 和 `docs/AGENT_DEVELOPMENT_GUIDE.md`，说明你准备修改的模块、不会影响的链路和验收方法，再开始改动。
+
+指南按“一个功能、一组入口文件、一套验证方法”组织。你可以只改 UI、触摸阈值、按键映射、Agent 数量、麦克风参数或 Bridge 行为，而不需要先理解整个仓库。
 
 ## 版本历史
 
 | 日期 | 固件 | Mac Bridge | 主要更新 |
 | --- | --- | --- | --- |
+| 2026-08-20 | v0.10.0 | v1.3.0 | 原生 Codex Micro BLE HID、四 Agent 两段式触摸、顶部推理滑动、中心四向 Radial、重连恢复与 Agent 友好开发文档 |
 | 2026-08-18 | v0.9.2 | v1.2.0 | 最近四小时活动方格恢复为每列上、下交替，短时间使用也能同时利用两排显示 |
 | 2026-08-18 | v0.9.1 | v1.2.0 | 统一双 UI 的 A/B 语音交互，识别完成前不再误发送，并修正 Classic / Pet 首页预览 |
 | 2026-08-18 | v0.9.0 | v1.2.0 | Codex 未读任务标题、滚动四小时活动热力图、续航实测与新版项目首页 |
@@ -142,6 +187,7 @@ Bridge 支持 Typeless 和微信输入法两种输入路径，也可以配合任
 
 ```bash
 cd firmware-stopwatch-idf
+python3 ./fetch_repos.py
 idf.py set-target esp32s3
 idf.py build
 idf.py flash

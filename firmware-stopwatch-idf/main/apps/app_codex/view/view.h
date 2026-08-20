@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace view {
 
@@ -27,6 +28,19 @@ public:
         Recording,
         Processing,
         Interrupted,
+    };
+
+    struct TaskItem {
+        std::string id;
+        std::string title;
+    };
+
+    struct NativeAgentState {
+        bool assigned = false;
+        uint32_t color = 0;
+        float brightness = 0.0f;
+        uint8_t effect = 0;
+        float speed = 0.0f;
     };
 
     struct QuotaSlot {
@@ -77,9 +91,19 @@ public:
     void applySnapshot(const codex::QuotaSnapshot& snapshot);
     void applyBleState(bool connected, const std::string& hostMessage, bool hostMessageChanged);
     void setUnreadTaskCount(int count);
+    void setUnreadTasks(const std::vector<TaskItem>& tasks);
+    void setNativeAgentStates(bool ready,
+                              bool communicating,
+                              const std::array<NativeAgentState, 4>& agents);
+    void showTaskList();
+    std::string consumeTaskOpenRequest();
+    int consumeNativeAgentSlotRequest();
+    void showActionMessage(const char* message);
     void setVoiceActive(bool active);
     void setVoiceMode(VoiceMode mode);
     bool consumeClearInputRequest();
+    int consumeReasoningDeltaRequest();
+    bool consumeNativeRadialRequest(float& angle, float& distance);
     uint32_t frameIntervalMs() const;
 
 private:
@@ -132,6 +156,21 @@ private:
     std::unique_ptr<uitk::lvgl_cpp::Container> _v2_sync_left_line;
     std::unique_ptr<uitk::lvgl_cpp::Container> _v2_sync_right_line;
     std::unique_ptr<uitk::lvgl_cpp::Container> _v2_sync_dot;
+    std::array<std::unique_ptr<uitk::lvgl_cpp::Container>, 4> _v2_agent_hits;
+    std::array<std::unique_ptr<uitk::lvgl_cpp::Container>, 4> _v2_agent_dots;
+    std::unique_ptr<uitk::lvgl_cpp::Container> _action_wheel_canvas;
+    std::unique_ptr<uitk::lvgl_cpp::Container> _action_wheel_center;
+    std::unique_ptr<uitk::lvgl_cpp::Label> _action_wheel_center_label;
+    std::array<std::unique_ptr<uitk::lvgl_cpp::Label>, 4> _action_wheel_labels;
+    std::unique_ptr<uitk::lvgl_cpp::Container> _task_list_canvas;
+    std::unique_ptr<uitk::lvgl_cpp::Label> _task_list_title;
+    std::array<std::unique_ptr<uitk::lvgl_cpp::Container>, 5> _task_row_buttons;
+    std::array<std::unique_ptr<uitk::lvgl_cpp::Label>, 5> _task_row_labels;
+    std::unique_ptr<uitk::lvgl_cpp::Container> _task_list_back_button;
+    std::unique_ptr<uitk::lvgl_cpp::Label> _task_list_back_label;
+    std::unique_ptr<uitk::lvgl_cpp::Container> _reasoning_canvas;
+    std::unique_ptr<uitk::lvgl_cpp::Container> _reasoning_panel;
+    std::unique_ptr<uitk::lvgl_cpp::Label> _reasoning_label;
     std::array<int, 9> _voice_bar_heights = {{-1, -1, -1, -1, -1, -1, -1, -1, -1}};
     std::array<int, 9> _voice_bar_opacities = {{-1, -1, -1, -1, -1, -1, -1, -1, -1}};
 
@@ -149,8 +188,42 @@ private:
     float _tilt_y             = 0.0f;
     float _shake_energy       = 0.0f;
     bool _pet_pressed        = false;
+    uint32_t _suppress_pet_click_until_ms = 0;
     bool _message_image_active = false;
     bool _clear_input_requested = false;
+    bool _action_touch_tracking = false;
+    bool _action_wheel_active = false;
+    uint32_t _action_touch_started_at = 0;
+    int _action_touch_start_x = 0;
+    int _action_touch_start_y = 0;
+    bool _native_control_blocked_until_release = false;
+    int _action_wheel_selection = -1;
+    int _native_control_axis = 0;
+    bool _native_radial_pending = false;
+    float _native_radial_angle = 0.75f;
+    float _native_radial_distance = 0.0f;
+    uint32_t _last_native_radial_tick = 0;
+    std::vector<TaskItem> _unread_tasks;
+    std::string _task_open_request;
+    std::array<NativeAgentState, 4> _native_agents = {};
+    std::array<int, 4> _native_agent_dot_sizes = {{-1, -1, -1, -1}};
+    std::array<int, 4> _native_agent_dot_opacities = {{-1, -1, -1, -1}};
+    std::array<uint32_t, 4> _native_agent_dot_colors = {};
+    bool _native_agents_ready = false;
+    bool _native_codex_communicating = false;
+    int _native_agent_slot_request = -1;
+    uint32_t _last_native_agent_anim_tick = 0;
+    bool _native_agent_touch_tracking = false;
+    int _native_agent_touch_candidate = -1;
+    uint32_t _native_agent_touch_started_at = 0;
+    uint32_t _native_agent_touch_last_visual_tick = 0;
+    bool _native_agent_touch_committed = false;
+    bool _task_list_active = false;
+    bool _reasoning_touch_tracking = false;
+    int _reasoning_touch_start_x = 0;
+    int _reasoning_swipe_direction = 0;
+    int _reasoning_swipe_step = 0;
+    int _reasoning_delta_request = 0;
     VoiceMode _voice_mode = VoiceMode::Idle;
     enum class PetAnim {
         Idle,
@@ -174,8 +247,29 @@ private:
     void updateFlipClock(bool force = false);
     void initOpenWatcherV2();
     void updateOpenWatcherV2Labels();
+    void updateNativeAgentRail(bool force = false);
+    int nativeAgentTargetAt(int x, int y) const;
+    void resetNativeAgentTouch();
+    static void nativeAgentTouchEvent(lv_event_t* event);
     static void drawOpenWatcherV2Event(lv_event_t* event);
     void drawOpenWatcherV2(lv_layer_t* layer, const lv_area_t& coords);
+    void initActionWheel();
+    void updateActionWheelGesture();
+    void setActionWheelVisible(bool visible);
+    void updateActionWheelSelection(int selection);
+    void queueNativeRadial(float angle, float distance);
+    void resetNativeTouchControl(bool queueNeutral);
+    static void drawActionWheelEvent(lv_event_t* event);
+    void drawActionWheel(lv_layer_t* layer, const lv_area_t& coords);
+    void initTaskList();
+    void setTaskListVisible(bool visible);
+    void updateTaskListRows();
+    void initReasoningControl();
+    void updateReasoningGesture();
+    void setReasoningControlVisible(bool visible);
+    void updateReasoningControlLabel();
+    static void drawReasoningControlEvent(lv_event_t* event);
+    void drawReasoningControl(lv_layer_t* layer, const lv_area_t& coords);
     void initPet();
     void updatePet();
     void initVoiceWaveform();

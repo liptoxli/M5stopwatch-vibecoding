@@ -2,6 +2,28 @@
 
 Mac Bridge 使用独立语义化版本。固件与 Bridge 的兼容版本关系见仓库根目录 [README](../../README.md#版本历史)。
 
+## [1.3.0] - 2026-08-20
+
+### Added
+
+- 读取本机 Codex 当前推理等级并随额度面板同步到 StopWatch。
+- 支持设备请求打开指定 Codex task，并为后续任务列表入口提供安全的 thread ID 校验和 `codex://threads/` 路由。
+- 支持推理等级回退队列：原生 Codex Micro Vendor HID 暂时不可用时，通过 Codex 命令面板逐级执行并在结束后重新同步确认状态。
+
+### Changed
+
+- BLE 重连时发现统一 HID 服务内的所有可通知 Report characteristic，辅助恢复 Codex Vendor Report 订阅。
+- 未读 task 同步扩展为可分片的 task 摘要协议；主界面仍优先显示四个原生 Agent 槽位。
+
+### Fixed
+
+- 修复 BLE 超时重连后标准键盘 Report 已恢复、Codex Vendor Report 仍未订阅的问题。
+- 修复连续调整推理等级时多条回退命令可能并发进入 Codex 命令面板的问题。
+
+### Compatibility
+
+- 不修改 16 kHz IMA-ADPCM 音频格式、虚拟麦克风驱动和原有 A/B 键配置。
+
 ## [1.2.0] - 2026-08-18
 
 ### Added
@@ -154,6 +176,7 @@ Mac Bridge 使用独立语义化版本。固件与 Bridge 的兼容版本关系�
 - 支持 `M5Codex-*` 连接、Codex 额度推送、输入模式和按键配置同步。
 - 支持 Typeless 状态观察、LaunchAgent 安装和 arm64 ZIP 发布包。
 
+[1.3.0]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v1.3.0
 [1.2.0]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v1.2.0
 [1.1.8]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.1.8
 [1.1.7]: https://github.com/liptoxli/M5stopwatch-vibecoding/releases/tag/v1.1.7

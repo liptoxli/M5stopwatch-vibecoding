@@ -63,6 +63,7 @@ list(APPEND MY_SRCS
     "assets/images/codex_pet_msg_error_1.c"
     "assets/images/codex_pet_msg_error_2.c"
     "hal/hal_bluetooth.cpp"
+    "hal/codex_micro_hid.cpp"
 )
 list(REMOVE_DUPLICATES MY_SRCS)
 

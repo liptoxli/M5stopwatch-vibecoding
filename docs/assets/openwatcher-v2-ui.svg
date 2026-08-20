@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="932" height="932" viewBox="0 0 466 466" role="img" aria-labelledby="title desc">
   <title id="title">OpenWatcher V2 Codex interface</title>
-  <desc id="desc">Circular black interface with semantic quota gradient, remaining quota, daily usage and four-hour activity heatmap.</desc>
+  <desc id="desc">Circular black interface with semantic quota gradient, remaining quota, daily usage, four-hour activity heatmap and four Codex Agent touch points.</desc>
   <defs>
     <clipPath id="screen"><circle cx="233" cy="233" r="232"/></clipPath>
     <linearGradient id="quota" x1="22" y1="130" x2="400" y2="52" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ff4038"/><stop offset=".34" stop-color="#ff9f19"/><stop offset=".68" stop-color="#ffd43b"/><stop offset="1" stop-color="#55f36a"/></linearGradient>
@@ -14,7 +14,7 @@
     <circle cx="233" cy="233" r="231.5" fill="none" stroke="#26303d" stroke-width="1"/>
     <path d="M 10 233 A 223 223 0 0 1 456 233" fill="none" stroke="#1e2a3c" stroke-width="7" opacity=".72"/>
     <path d="M 10 233 A 223 223 0 0 1 416 106" fill="none" stroke="url(#quota)" stroke-width="7" stroke-linecap="butt"/>
-    <text x="233" y="64" text-anchor="middle" font-size="24" font-weight="500" fill="#35b8ff">Codex Clear</text>
+    <text x="233" y="64" text-anchor="middle" font-size="24" font-weight="500" fill="#35b8ff">Codex Ready</text>
     <text x="233" y="99" text-anchor="middle" font-size="19" font-weight="600" class="soft">LEFT</text>
     <text x="57" y="137" font-size="18" font-weight="500" fill="#ff7438">TODAY</text>
     <text x="54" y="171" font-size="36" font-weight="650" fill="#ff7438">4%</text>
@@ -36,6 +36,11 @@
     <g stroke="#596cff" stroke-width="2"><line x1="218" y1="340" x2="227" y2="340"/><line x1="232" y1="340" x2="241" y2="340"/><line x1="246" y1="340" x2="255" y2="340"/></g>
     <text x="233" y="372" text-anchor="middle" font-size="18" class="soft">Quota synced</text>
     <g filter="url(#softGlow)" stroke="#a7f000"><line x1="163" y1="384" x2="208" y2="384"/><line x1="258" y1="384" x2="303" y2="384"/></g><circle cx="233" cy="384" r="3.5" fill="#c9ff53"/>
-    <circle cx="226" cy="444" r="4" fill="#2f79ff"/><circle cx="240" cy="444" r="4" fill="#38e07d"/>
+    <g filter="url(#softGlow)">
+      <circle cx="99" cy="367" r="7" fill="#304ffe" stroke="#8ea2ff" stroke-width="1"/>
+      <circle cx="184" cy="417" r="7" fill="#00ff4c" stroke="#8dffad" stroke-width="1"/>
+      <circle cx="282" cy="417" r="7" fill="#ff6d00" stroke="#ffba86" stroke-width="1"/>
+      <circle cx="367" cy="367" r="7" fill="#ff0033" stroke="#ff8ba2" stroke-width="1"/>
+    </g>
   </g>
 </svg>
