@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-08-21
+
+### Changed
+
+- 固件遇到 macOS 保留了旧配对信息时，只清理旧 bond 并重试一次，不再在同一连接中无限重复安全协商。
+- macOS Bridge 先等待系统原生 HID 连接由 IOHID 确认，再连接 Companion 和音频服务，避免与系统配对流程竞争。
+
+### Fixed
+
+- 修复首次连接有时需要反复忽略设备、重新配对两三次才能完成的问题。
+- 修复连接已经建立后 macOS 仍持续弹出设备认证提示的问题。
+- 修复 BLE 重连或较长时间空闲后，虚拟麦克风仍显示可用但实际没有音频的问题。
+
+### Verified
+
+- ESP-IDF v5.5.4 构建、USB 应用刷写和 Flash 哈希校验通过。
+- 实机重启后 macOS 原生 HID、Bridge event stream 和按需麦克风均自动恢复；Typeless 语音输入恢复正常。
+
 ## [0.10.0] - 2026-08-20
 
 ### Added
@@ -232,7 +250,8 @@
 - 新增 Typeless/微信输入法输入模式、A/B 键绑定、摇晃清除和 BLE HID 输入。
 - 新增 Codex 额度 BLE 推送、隐私与安全说明、功能说明和 Pet 替换文档。
 
-[Unreleased]: https://github.com/liptoxli/M5stopwatch-vibecoding/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/liptoxli/M5stopwatch-vibecoding/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.10.1
 [0.10.0]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.10.0
 [0.9.2]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.9.2
 [0.9.1]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.9.1

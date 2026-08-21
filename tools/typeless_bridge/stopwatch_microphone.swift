@@ -240,6 +240,37 @@ final class StopWatchMicrophonePipeline {
 
     var isRunning: Bool { output?.health(now: Date()).healthy == true }
 
+    /// Reassert the virtual input route before a new dictation session.  After
+    /// macOS rebuilds its audio graph, AVAudioEngine can continue reporting
+    /// `isRunning` even though the virtual device route held by an existing
+    /// client is no longer usable.  Rebuilding after a short idle period keeps
+    /// the first recording after reconnect/wake from inheriting that stale
+    /// route, while consecutive recordings keep the warm engine.
+    func prepareForRecording(rebuildAfterIdle idleSeconds: TimeInterval) throws -> (name: String, rebuilt: Bool) {
+        guard let device = MicrophoneCoreAudio.virtualDevice() else {
+            throw NSError(domain: "M5StopWatchMic", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey: "Virtual microphone is not installed: \(stopWatchVirtualMicrophoneName)"])
+        }
+
+        let now = Date()
+        let outputHealth = output?.health(now: now)
+        let packetIdle = lastPacketAt.map { now.timeIntervalSince($0) } ?? .infinity
+        let needsRebuild = output == nil ||
+            outputHealth?.healthy != true ||
+            packetIdle >= idleSeconds
+
+        if needsRebuild {
+            let name = output == nil ? try start() : try restartOutput()
+            prepareForStreamRestart()
+            return (name, true)
+        }
+
+        if MicrophoneCoreAudio.defaultInput() != device.input {
+            try MicrophoneCoreAudio.setDefaultInput(device.input)
+        }
+        return (device.name, false)
+    }
+
     func start() throws -> String {
         if let outputDeviceName, output != nil { return outputDeviceName }
         guard let device = MicrophoneCoreAudio.virtualDevice() else {

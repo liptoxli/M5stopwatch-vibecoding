@@ -5,8 +5,8 @@
 </p>
 
 <p align="center">
-  <img alt="Firmware v0.10.0" src="https://img.shields.io/badge/firmware-v0.10.0-6f5cff">
-  <img alt="Bridge v1.3.0" src="https://img.shields.io/badge/macOS%20Bridge-v1.3.0-35b8ff">
+  <img alt="Firmware v0.10.1" src="https://img.shields.io/badge/firmware-v0.10.1-6f5cff">
+  <img alt="Bridge v1.3.1" src="https://img.shields.io/badge/macOS%20Bridge-v1.3.1-35b8ff">
   <img alt="ESP32-S3" src="https://img.shields.io/badge/hardware-ESP32--S3-ef6c35">
   <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-55f36a">
 </p>
@@ -21,7 +21,7 @@ M5 StopWatch for Vibe Coding 为 Codex、ChatGPT、Claude Code 和 IDE 工作流
 
 ## 项目现状
 
-当前版本为 **固件 v0.10.0 / macOS Bridge v1.3.0**。语音输入、虚拟麦克风、BLE HID、原生 Codex Micro 兼容交互和圆屏触摸均已在真实设备上完成端到端验证。
+当前版本为 **固件 v0.10.1 / macOS Bridge v1.3.1**。语音输入、虚拟麦克风、BLE HID、原生 Codex Micro 兼容交互和圆屏触摸均已在真实设备上完成端到端验证。本次维护版进一步修复首次连接需要反复尝试、macOS 重复弹出认证提示，以及 Bridge 重连或较长时间空闲后虚拟麦克风可能无声的问题。
 
 | 能力 | 当前状态 |
 | --- | --- |
@@ -38,7 +38,7 @@ M5 StopWatch for Vibe Coding 为 Codex、ChatGPT、Claude Code 和 IDE 工作流
 | 断线与音频异常处理 | 已完成，异常时结束本次听写并提示重新录制 |
 | 省电、息屏和自动关机 | 已完成，日常混合使用约为 5 小时级 |
 
-当前版本适合实机体验、二次开发和日常语音输入。电量百分比仍以电池电压估算，低电量区会偏保守；因此页面中的续航数字是实测范围，不是实验室标称值。首次从 v0.9.x 升级到 v0.10.0 时，由于 HID 描述符发生变化，需要在 macOS 中忽略旧的 `M5Codex-*` 并重新配对一次。
+当前版本适合实机体验、二次开发和日常语音输入。电量百分比仍以电池电压估算，低电量区会偏保守；因此页面中的续航数字是实测范围，不是实验室标称值。首次从 v0.9.x 升级到 v0.10.x 时，由于 HID 描述符发生变化，需要在 macOS 中忽略旧的 `M5Codex-*` 并重新配对一次；已经正常使用 v0.10.0 的设备升级 v0.10.1 时无需再次忽略设备。
 
 ## 两套界面
 
@@ -162,6 +162,7 @@ Bridge 支持 Typeless 和微信输入法两种输入路径，也可以配合任
 
 | 日期 | 固件 | Mac Bridge | 主要更新 |
 | --- | --- | --- | --- |
+| 2026-08-21 | v0.10.1 | v1.3.1 | 修复首次连接竞争、重复认证提示，以及 BLE 重连或空闲后虚拟麦克风无声 |
 | 2026-08-20 | v0.10.0 | v1.3.0 | 原生 Codex Micro BLE HID、四 Agent 两段式触摸、顶部推理滑动、中心四向 Radial、重连恢复与 Agent 友好开发文档 |
 | 2026-08-18 | v0.9.2 | v1.2.0 | 最近四小时活动方格恢复为每列上、下交替，短时间使用也能同时利用两排显示 |
 | 2026-08-18 | v0.9.1 | v1.2.0 | 统一双 UI 的 A/B 语音交互，识别完成前不再误发送，并修正 Classic / Pet 首页预览 |

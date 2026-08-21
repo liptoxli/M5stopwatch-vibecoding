@@ -99,6 +99,7 @@ bool g_connected = false;
 bool g_paired = false;
 bool g_advertising = false;
 bool g_random_addr_set = false;
+bool g_repeat_pairing_retried = false;
 char g_device_name[16] = "M5Codex-AA";
 uint8_t g_own_addr_type = BLE_OWN_ADDR_RANDOM;
 uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
@@ -902,6 +903,7 @@ int gap_event(ble_gap_event* event, void*)
         g_advertising = false;
         if (event->connect.status == 0) {
             g_connected = true;
+            g_repeat_pairing_retried = false;
             g_conn_handle = event->connect.conn_handle;
             g_status_text = "BLE connected";
             update_ble_battery_level();
@@ -924,6 +926,7 @@ int gap_event(ble_gap_event* event, void*)
         ble_microphone::on_disconnected();
         g_connected = false;
         g_paired = false;
+        g_repeat_pairing_retried = false;
         g_bridge_event_subscribed = false;
         g_companion_ready_tick = 0;
         g_companion_limited = false;
@@ -990,13 +993,29 @@ int gap_event(ble_gap_event* event, void*)
         return 0;
     case BLE_GAP_EVENT_REPEAT_PAIRING:
     {
+        // A stale host/device bond should be repaired once.  Retrying the same
+        // security negotiation indefinitely makes macOS present the
+        // "authenticate this device" sheet over and over even though the BLE
+        // link is already present.
+        if (g_repeat_pairing_retried) {
+            ESP_LOGW(kTag, "repeat pairing requested again on the same connection; ignoring prompt loop");
+            set_host_status("Pairing retry stopped");
+            return BLE_GAP_REPEAT_PAIRING_IGNORE;
+        }
+
         ble_gap_conn_desc desc = {};
         const int rc = ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc);
         if (rc == 0) {
-            ble_store_util_delete_peer(&desc.peer_id_addr);
-            ESP_LOGI(kTag, "repeat pairing: deleted old bond");
-            set_host_status("BLE re-pairing");
-            return BLE_GAP_REPEAT_PAIRING_RETRY;
+            const int delete_rc = ble_store_util_delete_peer(&desc.peer_id_addr);
+            if (delete_rc == 0) {
+                g_repeat_pairing_retried = true;
+                ESP_LOGI(kTag, "repeat pairing: deleted old bond; retrying once");
+                set_host_status("BLE re-pairing");
+                return BLE_GAP_REPEAT_PAIRING_RETRY;
+            }
+            ESP_LOGW(kTag, "repeat pairing: old bond delete failed %d", delete_rc);
+            set_host_status("Pairing reset failed");
+            return BLE_GAP_REPEAT_PAIRING_IGNORE;
         }
         ESP_LOGW(kTag, "repeat pairing: find conn failed %d", rc);
         return BLE_GAP_REPEAT_PAIRING_IGNORE;

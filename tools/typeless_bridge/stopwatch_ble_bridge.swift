@@ -4,6 +4,7 @@ import Carbon
 import CoreBluetooth
 import Darwin
 import Foundation
+import IOKit
 
 private let deviceNamePrefix = "M5Codex-"
 private let legacyDeviceNames: Set<String> = ["M5Codex-HID4", "M5Codex-HID5"]
@@ -14,6 +15,9 @@ private let eventUUID = CBUUID(string: "ABCD0001-E819-B394-6344-2A2F31424C45")
 private let statusUUID = CBUUID(string: "ABCD0002-E819-B394-6344-2A2F31424C45")
 private let panelUUID = CBUUID(string: "ABCD0003-E819-B394-6344-2A2F31424C45")
 private let healthCheckInterval: TimeInterval = 5
+private let microphoneOutputPreflightIdleSeconds: TimeInterval = 8
+private let codexHIDVendorID = 0x303A
+private let codexHIDProductID = 0x8360
 private let codexDeviceId = "m5stack-stopwatch"
 private let supportDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/M5StopWatch/StopWatchBleBridge")
@@ -214,6 +218,34 @@ private enum MicrophoneControlCommand: UInt8 {
 private func isSupportedDeviceName(_ name: String?) -> Bool {
     guard let name else { return false }
     return name.hasPrefix(deviceNamePrefix) || legacyDeviceNames.contains(name)
+}
+
+private func ioRegistryProperty(_ service: io_registry_entry_t, _ key: String) -> Any? {
+    IORegistryEntryCreateCFProperty(service, key as CFString, kCFAllocatorDefault, 0)?
+        .takeRetainedValue()
+}
+
+private func isNativeCodexHIDConnected() -> Bool {
+    guard let matching = IOServiceMatching("IOHIDDevice") else { return false }
+    var iterator: io_iterator_t = 0
+    guard IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator) == KERN_SUCCESS else {
+        return false
+    }
+    defer { IOObjectRelease(iterator) }
+
+    while true {
+        let service = IOIteratorNext(iterator)
+        guard service != 0 else { break }
+        let vendor = (ioRegistryProperty(service, "VendorID") as? NSNumber)?.intValue
+        let product = (ioRegistryProperty(service, "ProductID") as? NSNumber)?.intValue
+        let name = ioRegistryProperty(service, "Product") as? String
+        let matched = vendor == codexHIDVendorID
+            && product == codexHIDProductID
+            && isSupportedDeviceName(name)
+        IOObjectRelease(service)
+        if matched { return true }
+    }
+    return false
 }
 
 private struct KeyBinding: Codable, Equatable {
@@ -2190,6 +2222,17 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         let advName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
         guard isSupportedDeviceName(peripheral.name) || isSupportedDeviceName(advName) else { return }
 
+        // Never race macOS' native HOGP pairing agent. Only attach the custom
+        // bridge/audio services after IOHID confirms that the native keyboard
+        // link is already paired and owned by the system. CoreBluetooth does
+        // not return a system-owned HID link from retrieveConnectedPeripherals,
+        // so this IORegistry gate is the reliable hand-off point.
+        guard isNativeCodexHIDConnected() else {
+            BridgeStatusCenter.shared.bleStatus = "Waiting for system connection"
+            log("Found \(peripheral.name ?? advName ?? deviceNamePrefix), RSSI \(RSSI). Waiting for macOS HID pairing/connection...")
+            return
+        }
+
         self.peripheral = peripheral
         peripheral.delegate = self
         nameScanFallbackWorkItem?.cancel()
@@ -2197,7 +2240,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         scanRecoveryActive = false
         central.stopScan()
         BridgeStatusCenter.shared.bleStatus = "Connecting"
-        log("Found \(peripheral.name ?? advName ?? deviceNamePrefix), RSSI \(RSSI). Connecting bridge...")
+        log("Found paired \(peripheral.name ?? advName ?? deviceNamePrefix), RSSI \(RSSI). Connecting bridge...")
         central.connect(peripheral)
     }
 
@@ -2238,7 +2281,10 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         quotaTimer = nil
         resetBridgeCharacteristics()
         if SettingsStore.shared.settings.virtualMicrophoneEnabled {
-            microphonePipeline.prepareForStreamRestart()
+            // Tear down the Core Audio route as well as BLE state.  Keeping the
+            // old AVAudioEngine alive across a radio reconnect can leave a
+            // virtual input that renders silence while still reporting healthy.
+            microphonePipeline.stop()
             BridgeStatusCenter.shared.microphoneStatus = interruptedRecording ? "Interrupted" : "Waiting for BLE"
         } else {
             microphonePipeline.stop()
@@ -3189,6 +3235,20 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         }
 
         if !shouldStop {
+            if SettingsStore.shared.settings.virtualMicrophoneEnabled {
+                do {
+                    let result = try microphonePipeline.prepareForRecording(
+                        rebuildAfterIdle: microphoneOutputPreflightIdleSeconds
+                    )
+                    if result.rebuilt {
+                        log("microphone recording preflight rebuilt output device=\(result.name)")
+                    }
+                } catch {
+                    BridgeStatusCenter.shared.microphoneStatus = "Output failed"
+                    BridgeStatusCenter.shared.lastError = error.localizedDescription
+                    log("microphone recording preflight failed: \(error.localizedDescription)")
+                }
+            }
             let target = currentInputFocusTarget()
             let focus = target?.focus ?? frontmostFocusSnapshot()
             typelessSessionActive = true
