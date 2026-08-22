@@ -16,6 +16,9 @@ private let statusUUID = CBUUID(string: "ABCD0002-E819-B394-6344-2A2F31424C45")
 private let panelUUID = CBUUID(string: "ABCD0003-E819-B394-6344-2A2F31424C45")
 private let healthCheckInterval: TimeInterval = 5
 private let microphoneOutputPreflightIdleSeconds: TimeInterval = 8
+private let nativeHIDBridgeSettleSeconds: TimeInterval = 0.7
+private let authenticationRetrySeconds: TimeInterval = 1.2
+private let authenticationRetryLimit = 3
 private let codexHIDVendorID = 0x303A
 private let codexHIDProductID = 0x8360
 private let codexDeviceId = "m5stack-stopwatch"
@@ -2086,6 +2089,10 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private var healthTimer: Timer?
     private var scanRecoveryActive = false
     private var nameScanFallbackWorkItem: DispatchWorkItem?
+    private var nativeHIDConnectWorkItem: DispatchWorkItem?
+    private var authenticationRecoveryWorkItem: DispatchWorkItem?
+    private var authenticationRecoveryAttempts = 0
+    private var lastNativeHIDWaitLogAt = Date.distantPast
     private var panelSequence = 1
     private var quotaFetchInFlight = false
     private var bridgeDiscoveryInFlight = false
@@ -2209,6 +2216,10 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         default:
             nameScanFallbackWorkItem?.cancel()
             nameScanFallbackWorkItem = nil
+            nativeHIDConnectWorkItem?.cancel()
+            nativeHIDConnectWorkItem = nil
+            authenticationRecoveryWorkItem?.cancel()
+            authenticationRecoveryWorkItem = nil
             scanRecoveryActive = false
             BridgeStatusCenter.shared.bleStatus = "BLE unavailable"
             log("BLE unavailable: \(central.state.rawValue)")
@@ -2229,22 +2240,20 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         // so this IORegistry gate is the reliable hand-off point.
         guard isNativeCodexHIDConnected() else {
             BridgeStatusCenter.shared.bleStatus = "Waiting for system connection"
-            log("Found \(peripheral.name ?? advName ?? deviceNamePrefix), RSSI \(RSSI). Waiting for macOS HID pairing/connection...")
+            if Date().timeIntervalSince(lastNativeHIDWaitLogAt) >= 10 {
+                lastNativeHIDWaitLogAt = Date()
+                log("Found \(peripheral.name ?? advName ?? deviceNamePrefix), RSSI \(RSSI). Waiting for macOS HID pairing/connection...")
+            }
             return
         }
-
-        self.peripheral = peripheral
-        peripheral.delegate = self
-        nameScanFallbackWorkItem?.cancel()
-        nameScanFallbackWorkItem = nil
-        scanRecoveryActive = false
-        central.stopScan()
-        BridgeStatusCenter.shared.bleStatus = "Connecting"
-        log("Found paired \(peripheral.name ?? advName ?? deviceNamePrefix), RSSI \(RSSI). Connecting bridge...")
-        central.connect(peripheral)
+        connectAfterNativeHIDSettles(peripheral,
+                                     status: "Connecting",
+                                     reason: "paired device discovered at RSSI \(RSSI)")
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        nativeHIDConnectWorkItem?.cancel()
+        nativeHIDConnectWorkItem = nil
         nameScanFallbackWorkItem?.cancel()
         nameScanFallbackWorkItem = nil
         scanRecoveryActive = false
@@ -2255,6 +2264,8 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        nativeHIDConnectWorkItem?.cancel()
+        nativeHIDConnectWorkItem = nil
         BridgeStatusCenter.shared.bleStatus = "Connect failed"
         BridgeStatusCenter.shared.lastError = error?.localizedDescription ?? "unknown"
         log("Connect failed: \(error?.localizedDescription ?? "unknown")")
@@ -2270,6 +2281,11 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        nativeHIDConnectWorkItem?.cancel()
+        nativeHIDConnectWorkItem = nil
+        authenticationRecoveryWorkItem?.cancel()
+        authenticationRecoveryWorkItem = nil
+        authenticationRecoveryAttempts = 0
         let interruptedRecording = SettingsStore.shared.settings.virtualMicrophoneEnabled &&
             SettingsStore.shared.settings.inputMode == .typeless &&
             (typelessSessionActive || lastState?.phase == "recording")
@@ -2413,6 +2429,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
                 BridgeStatusCenter.shared.microphoneStatus = "Subscribe failed"
                 BridgeStatusCenter.shared.lastError = error.localizedDescription
                 log("Microphone subscription failed: \(error.localizedDescription)")
+                scheduleAuthenticationRecoveryIfNeeded(error, source: "microphone")
                 return
             }
             if characteristic.uuid == stopWatchMicrophoneAudioUUID {
@@ -2424,6 +2441,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
                 }
                 if characteristic.isNotifying,
                    SettingsStore.shared.settings.virtualMicrophoneEnabled {
+                    clearAuthenticationRecovery()
                     microphoneResubscribePending = false
                     queueMicrophoneControl(.armOnDemand)
                     BridgeStatusCenter.shared.microphoneStatus = "Ready"
@@ -2436,9 +2454,13 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             eventNotifyEnabled = false
             BridgeStatusCenter.shared.lastError = error.localizedDescription
             log("Event subscription failed: \(error.localizedDescription)")
+            scheduleAuthenticationRecoveryIfNeeded(error, source: "event stream")
             return
         }
         eventNotifyEnabled = characteristic.isNotifying
+        if eventNotifyEnabled {
+            clearAuthenticationRecovery()
+        }
         log(eventNotifyEnabled ? "Device event stream subscribed." : "Device event stream unsubscribed.")
     }
 
@@ -2677,22 +2699,106 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
                                    options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
     }
 
+    private func connectAfterNativeHIDSettles(_ candidate: CBPeripheral,
+                                               status: String,
+                                               reason: String) {
+        guard peripheral == nil else { return }
+        peripheral = candidate
+        candidate.delegate = self
+        nameScanFallbackWorkItem?.cancel()
+        nameScanFallbackWorkItem = nil
+        scanRecoveryActive = false
+        central.stopScan()
+        BridgeStatusCenter.shared.bleStatus = "Waiting for system connection"
+        log("Native HID ready. Waiting \(nativeHIDBridgeSettleSeconds)s before bridge attach (\(reason))...")
+
+        let work = DispatchWorkItem { [weak self, weak candidate] in
+            guard let self, let candidate, self.peripheral === candidate else { return }
+            self.nativeHIDConnectWorkItem = nil
+            guard isNativeCodexHIDConnected() else {
+                self.peripheral = nil
+                self.scanRecoveryActive = false
+                self.logNativeHIDNotReady(reason: reason)
+                self.recoverConnection(reason: "native HID hand-off lost")
+                return
+            }
+            BridgeStatusCenter.shared.bleStatus = status
+            log("Connecting bridge after native HID hand-off (\(reason))...")
+            self.central.connect(candidate)
+        }
+        nativeHIDConnectWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + nativeHIDBridgeSettleSeconds,
+                                      execute: work)
+    }
+
+    private func logNativeHIDNotReady(reason: String) {
+        if Date().timeIntervalSince(lastNativeHIDWaitLogAt) >= 10 {
+            lastNativeHIDWaitLogAt = Date()
+            log("Waiting for macOS native HID before bridge attach (\(reason))...")
+        }
+        BridgeStatusCenter.shared.bleStatus = "Waiting for system connection"
+    }
+
+    private func scheduleAuthenticationRecoveryIfNeeded(_ error: Error, source: String) {
+        let nsError = error as NSError
+        guard nsError.domain == CBATTErrorDomain, nsError.code == 0x05 else { return }
+        guard authenticationRecoveryWorkItem == nil else { return }
+
+        authenticationRecoveryAttempts += 1
+        guard authenticationRecoveryAttempts <= authenticationRetryLimit else {
+            BridgeStatusCenter.shared.bleStatus = "Pairing reset required"
+            BridgeStatusCenter.shared.lastError = "Bluetooth authentication did not recover"
+            log("Authentication retry limit reached after \(source); preserving the connection without another pairing prompt.")
+            return
+        }
+
+        BridgeStatusCenter.shared.bleStatus = "Waiting for authentication"
+        log("Authentication not ready for \(source). Retrying subscriptions in \(authenticationRetrySeconds)s (\(authenticationRecoveryAttempts)/\(authenticationRetryLimit))...")
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.authenticationRecoveryWorkItem = nil
+            guard let peripheral = self.peripheral,
+                  peripheral.state == .connected,
+                  isNativeCodexHIDConnected() else {
+                self.logNativeHIDNotReady(reason: "authentication retry")
+                return
+            }
+            if let event = self.eventCharacteristic, !event.isNotifying {
+                peripheral.setNotifyValue(true, for: event)
+            }
+            if SettingsStore.shared.settings.virtualMicrophoneEnabled {
+                if let audio = self.microphoneAudioCharacteristic, !audio.isNotifying {
+                    peripheral.setNotifyValue(true, for: audio)
+                }
+                if let stats = self.microphoneStatsCharacteristic, !stats.isNotifying {
+                    peripheral.setNotifyValue(true, for: stats)
+                }
+            }
+        }
+        authenticationRecoveryWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + authenticationRetrySeconds,
+                                      execute: work)
+    }
+
+    private func clearAuthenticationRecovery() {
+        authenticationRecoveryWorkItem?.cancel()
+        authenticationRecoveryWorkItem = nil
+        authenticationRecoveryAttempts = 0
+    }
+
     private func recoverConnection(reason: String) {
         guard central.state == .poweredOn, peripheral == nil else { return }
 
         let connected = central.retrieveConnectedPeripherals(withServices: [serviceUUID]) +
             central.retrieveConnectedPeripherals(withServices: [hidServiceUUID])
         if let candidate = connected.first(where: { isSupportedDeviceName($0.name) }) {
-            nameScanFallbackWorkItem?.cancel()
-            nameScanFallbackWorkItem = nil
-            scanRecoveryActive = false
-            central.stopScan()
-            peripheral = candidate
-            candidate.delegate = self
-            BridgeStatusCenter.shared.bleStatus = "Reconnecting"
-            log("Found connected \(candidate.name ?? deviceNamePrefix). Recovering bridge connection (\(reason))...")
-            central.connect(candidate)
-            return
+            if isNativeCodexHIDConnected() {
+                connectAfterNativeHIDSettles(candidate,
+                                             status: "Reconnecting",
+                                             reason: reason)
+                return
+            }
+            logNativeHIDNotReady(reason: reason)
         }
 
         guard !scanRecoveryActive else { return }

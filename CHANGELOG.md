@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-08-22
+
+### Changed
+
+- 将 NimBLE CCCD 容量由 8 提升至 16；当前统一 HID、Bridge、麦克风、电池和 Service Changed 实际需要保存 10 条订阅。
+- BLE 启动日志新增 bond 与 CCCD 数量，方便定位配对持久化和订阅容量问题。
+- 重复配对事件不再自动删除设备端 bond；需要重置配对时改由用户明确执行，避免在回调中产生半删除状态。
+
+### Fixed
+
+- 修复 NimBLE 删除旧 peer 时先删除安全密钥、随后 CCCD NVS 删除失败，导致当前连接暂时可用但下次重启 `bonds=0` 的问题。
+- 修复设备重启后 macOS 保留旧密钥、StopWatch 已丢失密钥，最终只能通过“忽略此设备”重新配对才能恢复的问题。
+
+### Verified
+
+- ESP-IDF v5.5.4 全量构建及 USB `app-flash` 成功，应用镜像 SHA-256 为 `6385b6782b810dd1b50599b4ce9a20fa6c54cfbbb426aacc70adf1d1080764e9`。
+- 刷机启动及连续两次受控重启均保持 `bonds=1`、`cccds=10`、加密成功，并自动恢复原生 HID、Bridge event stream 和麦克风通知。
+
 ## [0.10.1] - 2026-08-21
 
 ### Changed
@@ -250,7 +268,8 @@
 - 新增 Typeless/微信输入法输入模式、A/B 键绑定、摇晃清除和 BLE HID 输入。
 - 新增 Codex 额度 BLE 推送、隐私与安全说明、功能说明和 Pet 替换文档。
 
-[Unreleased]: https://github.com/liptoxli/M5stopwatch-vibecoding/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/liptoxli/M5stopwatch-vibecoding/compare/v0.10.2...HEAD
+[0.10.2]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.10.2
 [0.10.1]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.10.1
 [0.10.0]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.10.0
 [0.9.2]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.9.2

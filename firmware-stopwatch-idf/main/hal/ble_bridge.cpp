@@ -99,7 +99,6 @@ bool g_connected = false;
 bool g_paired = false;
 bool g_advertising = false;
 bool g_random_addr_set = false;
-bool g_repeat_pairing_retried = false;
 char g_device_name[16] = "M5Codex-AA";
 uint8_t g_own_addr_type = BLE_OWN_ADDR_RANDOM;
 uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
@@ -903,7 +902,6 @@ int gap_event(ble_gap_event* event, void*)
         g_advertising = false;
         if (event->connect.status == 0) {
             g_connected = true;
-            g_repeat_pairing_retried = false;
             g_conn_handle = event->connect.conn_handle;
             g_status_text = "BLE connected";
             update_ble_battery_level();
@@ -926,7 +924,6 @@ int gap_event(ble_gap_event* event, void*)
         ble_microphone::on_disconnected();
         g_connected = false;
         g_paired = false;
-        g_repeat_pairing_retried = false;
         g_bridge_event_subscribed = false;
         g_companion_ready_tick = 0;
         g_companion_limited = false;
@@ -993,31 +990,17 @@ int gap_event(ble_gap_event* event, void*)
         return 0;
     case BLE_GAP_EVENT_REPEAT_PAIRING:
     {
-        // A stale host/device bond should be repaired once.  Retrying the same
-        // security negotiation indefinitely makes macOS present the
-        // "authenticate this device" sheet over and over even though the BLE
-        // link is already present.
-        if (g_repeat_pairing_retried) {
-            ESP_LOGW(kTag, "repeat pairing requested again on the same connection; ignoring prompt loop");
-            set_host_status("Pairing retry stopped");
-            return BLE_GAP_REPEAT_PAIRING_IGNORE;
-        }
-
-        ble_gap_conn_desc desc = {};
-        const int rc = ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc);
-        if (rc == 0) {
-            const int delete_rc = ble_store_util_delete_peer(&desc.peer_id_addr);
-            if (delete_rc == 0) {
-                g_repeat_pairing_retried = true;
-                ESP_LOGI(kTag, "repeat pairing: deleted old bond; retrying once");
-                set_host_status("BLE re-pairing");
-                return BLE_GAP_REPEAT_PAIRING_RETRY;
-            }
-            ESP_LOGW(kTag, "repeat pairing: old bond delete failed %d", delete_rc);
-            set_host_status("Pairing reset failed");
-            return BLE_GAP_REPEAT_PAIRING_IGNORE;
-        }
-        ESP_LOGW(kTag, "repeat pairing: find conn failed %d", rc);
+        // Never delete a peer from inside the repeat-pairing callback. NimBLE's
+        // peer deletion is not atomic: it removes the security keys before the
+        // CCCD records. If the CCCD NVS write fails, the running link can keep
+        // working while the next reboot has no bond, forcing macOS to forget
+        // and pair the device again. Explicit user-driven pairing reset is the
+        // only safe place to remove a bond.
+        ESP_LOGW(kTag,
+                 "repeat pairing ignored: preserving bond (conn=%d paired=%d)",
+                 event->repeat_pairing.conn_handle,
+                 g_paired ? 1 : 0);
+        set_host_status("Pairing reset required");
         return BLE_GAP_REPEAT_PAIRING_IGNORE;
     }
     case BLE_GAP_EVENT_PASSKEY_ACTION:
@@ -1087,13 +1070,17 @@ void sync_callback()
     ble_addr_t bonded_peers[4] = {};
     int bonded_peer_count = 0;
     const int bond_rc = ble_store_util_bonded_peers(bonded_peers, &bonded_peer_count, 4);
+    int cccd_count = 0;
+    const int cccd_rc = ble_store_util_count(BLE_STORE_OBJ_TYPE_CCCD, &cccd_count);
     ESP_LOGI(kTag,
-             "host synced: protocol=%u boot_kbd=%u report_kbd=%u bonds=%d rc=%d",
+             "host synced: protocol=%u boot_kbd=%u report_kbd=%u bonds=%d rc=%d cccds=%d cccd_rc=%d",
              g_protocol_handle,
              g_boot_keyboard_input_handle,
              g_report_keyboard_input_handle,
              bonded_peer_count,
-             bond_rc);
+             bond_rc,
+             cccd_count,
+             cccd_rc);
     advertise();
 }
 

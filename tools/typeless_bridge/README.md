@@ -2,7 +2,7 @@
 
 StopWatch BLE Bridge is the macOS companion app for the M5 StopWatch Codex firmware.
 
-Current version: **v1.3.1**. Full version history: [CHANGELOG.md](CHANGELOG.md).
+Current version: **v1.3.2**. Full version history: [CHANGELOG.md](CHANGELOG.md).
 
 It provides local functions including:
 
@@ -20,7 +20,7 @@ Real keyboard input is sent by the device firmware through BLE HID. The bridge a
 
 ## Codex Micro compatibility
 
-Firmware v0.10.1 exposes one unified BLE HID service containing standard keyboard, Consumer Control and Vendor-defined Codex Reports. The Bridge does not replace that native path. It waits for macOS to own the native HID connection before attaching Companion/audio services, helps rediscover notifying HID Report characteristics after reconnects, pushes the confirmed reasoning label back to the display and provides a serialized command-palette fallback only when the native reasoning Report is not available.
+Firmware v0.10.2 exposes one unified BLE HID service containing standard keyboard, Consumer Control and Vendor-defined Codex Reports. The Bridge does not replace that native path. It waits for macOS to own and settle the native HID connection before attaching Companion/audio services, helps rediscover notifying HID Report characteristics after reconnects, pushes the confirmed reasoning label back to the display and provides a serialized command-palette fallback only when the native reasoning Report is not available.
 
 Agent slot taps (`AG00` to `AG03`) and center Radial events are sent directly by firmware. They do not require Accessibility-based key injection. On the first upgrade from the older HID layout, remove the old `M5Codex-*` pairing in macOS and pair it again once.
 
@@ -199,14 +199,14 @@ tools/typeless_bridge/build_stopwatch_ble_bridge.sh
 ## Package Release
 
 ```bash
-tools/typeless_bridge/package_release.sh 1.3.1
+tools/typeless_bridge/package_release.sh 1.3.2
 ```
 
 This creates:
 
 ```text
-dist/StopWatch-BLE-Bridge-1.3.1-macOS-arm64.zip
-dist/StopWatch-BLE-Bridge-1.3.1-macOS-arm64.zip.sha256
+dist/StopWatch-BLE-Bridge-1.3.2-macOS-arm64.zip
+dist/StopWatch-BLE-Bridge-1.3.2-macOS-arm64.zip.sha256
 ```
 
 The release package contains only the app bundle. It does not install the LaunchAgent or start the app automatically.
@@ -215,7 +215,7 @@ To build the product installer that installs the app, login LaunchAgent, and
 `M5 StopWatch Mic` Core Audio driver together:
 
 ```bash
-tools/typeless_bridge/package_product_installer.sh 1.3.1
+tools/typeless_bridge/package_product_installer.sh 1.3.2
 ```
 
 The `.pkg` requires administrator authorization because it writes the audio
