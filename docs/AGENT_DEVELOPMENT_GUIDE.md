@@ -13,8 +13,8 @@
 
 | 组件 | 版本 | 已验证能力 |
 | --- | --- | --- |
-| StopWatch 固件 | v0.10.2 | 两套 UI、A/B 键、摇晃、实时 BLE 麦克风、额度、四小时热力图、四 Agent、推理滑动、中心四向 Radial、持久化配对保护 |
-| macOS Bridge | v1.3.2 | BLE Companion、虚拟麦克风、Typeless 状态、额度与活动同步、原生 HID 稳定交接、有限认证重试、推理等级同步与回退 |
+| StopWatch 固件 | v0.10.4 | 两套 UI、A/B 键、摇晃、实时 BLE 麦克风、额度、四小时热力图、四 Agent、推理滑动、中心四向 Radial、持久化配对保护与 Vendor HID 在线自校验 |
+| macOS Bridge | v1.3.3 | BLE Companion、虚拟麦克风、Typeless 状态、额度与活动同步、原生 HID 稳定交接、麦克风录音前自愈、Typeless 自动拉起、推理等级同步与回退 |
 | 虚拟麦克风 | `M5 StopWatch Mic` | 16 kHz 单声道 PCM 输入，由 Bridge 写入本机 Core Audio 驱动 |
 
 以下能力已经完成真实设备验收，可以作为回归基线：
@@ -29,6 +29,7 @@
 - 不要在 `BLE_GAP_EVENT_REPEAT_PAIRING` 回调中自动删除 peer；NimBLE 会先删除安全密钥再删除 CCCD，后一步失败会留下下次启动无法恢复的半删除 bond。
 - 统一 HID、Bridge、麦克风、电池和 Service Changed 当前会持久化 10 条 CCCD，`CONFIG_BT_NIMBLE_MAX_CCCDS` 不得低于 16。
 - 新录音开始前会预检虚拟输入路由，空闲超过 8 秒或输出不健康时重建音频引擎。
+- Typeless 未运行时，Bridge 会在后台启动它，等待快捷键注册后补发当前这一次 A 键；修改这条链路时必须保留单次补发和超时保护。
 
 未读 task 的解析、同步和列表 UI 已有代码基础，但当前默认主界面没有绑定“打开任务列表”的入口。除非需求明确要求，不要把它写成已经交付的默认操作，也不要擅自占用中心点或四个 Agent 点。
 

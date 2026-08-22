@@ -35,6 +35,8 @@ private let logFileURL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Logs/stopwatch-ble-bridge.log")
 private let bridgeSettingsChangedNotification = Notification.Name("StopWatchBleBridgeSettingsChanged")
 private let typelessPrimaryDownDebounceSeconds: TimeInterval = 0.35
+private let typelessLaunchTimeoutSeconds: TimeInterval = 6
+private let typelessShortcutRegistrationDelaySeconds: TimeInterval = 0.65
 private let typelessStartIdleGraceSeconds: TimeInterval = 1.0
 private let typelessProcessingIdleGraceSeconds: TimeInterval = 1.2
 private let typelessProcessingMaximumSeconds: TimeInterval = 2.8
@@ -741,22 +743,28 @@ private struct BridgeSelfCheck {
 }
 
 private func typelessInstallStatus() -> String {
-    if NSWorkspace.shared.runningApplications.contains(where: {
-        $0.bundleIdentifier == "now.typeless.desktop" || $0.localizedName == "Typeless"
-    }) {
+    if runningTypelessApplication() != nil {
         return "Running"
     }
+    return typelessApplicationURL() != nil ? "Installed" : "Optional"
+}
+
+private func typelessApplicationURL() -> URL? {
     let appURLs = [
         URL(fileURLWithPath: "/Applications/Typeless.app"),
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/Typeless.app")
     ]
-    return appURLs.contains(where: { FileManager.default.fileExists(atPath: $0.path) }) ? "Installed" : "Optional"
+    return appURLs.first(where: { FileManager.default.fileExists(atPath: $0.path) })
+}
+
+private func runningTypelessApplication() -> NSRunningApplication? {
+    NSWorkspace.shared.runningApplications.first {
+        $0.bundleIdentifier == "now.typeless.desktop" || $0.localizedName == "Typeless"
+    }
 }
 
 private func isTypelessRunning() -> Bool {
-    NSWorkspace.shared.runningApplications.contains {
-        $0.bundleIdentifier == "now.typeless.desktop" || $0.localizedName == "Typeless"
-    }
+    runningTypelessApplication() != nil
 }
 
 private func codexQuotaAuthStatus(settings: BridgeSettings) -> String {
@@ -2114,6 +2122,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private var microphoneControlWriteInFlight = false
     private var microphoneShortcutMonitor: Any?
     private var suppressNextMicrophoneShortcut = false
+    private var typelessLaunchInFlight = false
     private var microphoneSessionFaulted = false
     private var microphoneRecordingStartedAt: Date?
     private var microphoneDroppedBaseline: UInt32 = 0
@@ -3333,43 +3342,126 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         let shouldStop = typelessSessionActive ||
             lastState?.phase == "recording"
 
+        if !shouldStop {
+            prepareMicrophoneForTypelessRecording(source: "StopWatch A")
+        }
+
         if !shouldStop && !isTypelessRunning() {
             resetTypelessSessionTracking(clearFocus: true)
-            write(VoiceState(active: false, phase: "idle", message: "Typeless 未运行"))
-            log("typeless start status ignored: Typeless is not running.")
+            write(VoiceState(active: false, phase: "idle", message: "正在启动 Typeless"))
+            launchTypelessAndReplayPrimaryShortcut()
             return
         }
 
         if !shouldStop {
-            if SettingsStore.shared.settings.virtualMicrophoneEnabled {
-                do {
-                    let result = try microphonePipeline.prepareForRecording(
-                        rebuildAfterIdle: microphoneOutputPreflightIdleSeconds
-                    )
-                    if result.rebuilt {
-                        log("microphone recording preflight rebuilt output device=\(result.name)")
-                    }
-                } catch {
-                    BridgeStatusCenter.shared.microphoneStatus = "Output failed"
-                    BridgeStatusCenter.shared.lastError = error.localizedDescription
-                    log("microphone recording preflight failed: \(error.localizedDescription)")
-                }
-            }
-            let target = currentInputFocusTarget()
-            let focus = target?.focus ?? frontmostFocusSnapshot()
-            typelessSessionActive = true
-            write(VoiceState(active: true, phase: "recording", message: "正在录制中"))
-            if let target {
-                log("typeless start observed target=\(target.focus.appName) role=\(target.role)")
-            } else if let focus {
-                log("typeless start observed target=\(focus.appName) window=\(focus.windowTitle)")
-            } else {
-                log("typeless start observed without focus snapshot")
-            }
+            beginTypelessRecordingStatus(source: "device shortcut")
             return
         }
 
         handleTypelessStopStatus(reason: "toggle")
+    }
+
+    private func prepareMicrophoneForTypelessRecording(source: String) {
+        guard SettingsStore.shared.settings.virtualMicrophoneEnabled else { return }
+
+        if let peripheral,
+           let audio = microphoneAudioCharacteristic,
+           !audio.isNotifying {
+            microphoneResubscribePending = false
+            peripheral.setNotifyValue(true, for: audio)
+            log("microphone recording preflight restored audio subscription source=\(source)")
+        }
+
+        do {
+            let result = try microphonePipeline.prepareForRecording(
+                rebuildAfterIdle: microphoneOutputPreflightIdleSeconds
+            )
+            if result.rebuilt {
+                log("microphone recording preflight rebuilt output device=\(result.name) source=\(source)")
+            }
+        } catch {
+            BridgeStatusCenter.shared.microphoneStatus = "Output failed"
+            BridgeStatusCenter.shared.lastError = error.localizedDescription
+            log("microphone recording preflight failed source=\(source): \(error.localizedDescription)")
+        }
+
+        queueMicrophoneControl(.startVoice)
+    }
+
+    private func beginTypelessRecordingStatus(source: String) {
+        let target = currentInputFocusTarget()
+        let focus = target?.focus ?? frontmostFocusSnapshot()
+        typelessSessionActive = true
+        write(VoiceState(active: true, phase: "recording", message: "正在录制中"))
+        if let target {
+            log("typeless start observed source=\(source) target=\(target.focus.appName) role=\(target.role)")
+        } else if let focus {
+            log("typeless start observed source=\(source) target=\(focus.appName) window=\(focus.windowTitle)")
+        } else {
+            log("typeless start observed source=\(source) without focus snapshot")
+        }
+    }
+
+    private func launchTypelessAndReplayPrimaryShortcut() {
+        guard !typelessLaunchInFlight else {
+            log("Typeless launch already in flight; keeping the pending primary shortcut")
+            return
+        }
+        guard let appURL = typelessApplicationURL() else {
+            write(VoiceState(active: false, phase: "idle", message: "Typeless 未安装"))
+            BridgeStatusCenter.shared.lastError = "Typeless is not installed"
+            log("Typeless auto-launch failed: application is not installed")
+            return
+        }
+
+        typelessLaunchInFlight = true
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        configuration.addsToRecentItems = false
+        log("Typeless is not running; launching it before replaying the primary shortcut")
+        NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { [weak self] _, error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let error {
+                    self.typelessLaunchInFlight = false
+                    self.write(VoiceState(active: false, phase: "idle", message: "Typeless 启动失败"))
+                    BridgeStatusCenter.shared.lastError = error.localizedDescription
+                    log("Typeless auto-launch failed: \(error.localizedDescription)")
+                    return
+                }
+                self.waitForTypelessShortcutRegistration(
+                    deadline: Date().addingTimeInterval(typelessLaunchTimeoutSeconds)
+                )
+            }
+        }
+    }
+
+    private func waitForTypelessShortcutRegistration(deadline: Date) {
+        if let application = runningTypelessApplication(), application.isFinishedLaunching {
+            DispatchQueue.main.asyncAfter(deadline: .now() + typelessShortcutRegistrationDelaySeconds) { [weak self] in
+                guard let self, self.typelessLaunchInFlight else { return }
+                self.typelessLaunchInFlight = false
+                self.prepareMicrophoneForTypelessRecording(source: "Typeless auto-launch")
+                self.beginTypelessRecordingStatus(source: "Typeless auto-launch retry")
+                if !self.postTypelessPrimaryShortcut(reason: "auto-launch retry", suppressMicrophoneWake: true) {
+                    self.resetTypelessSessionTracking(clearFocus: true)
+                    self.write(VoiceState(active: false, phase: "idle", message: "Typeless 快捷键失败"))
+                }
+            }
+            return
+        }
+
+        guard Date() < deadline else {
+            typelessLaunchInFlight = false
+            write(VoiceState(active: false, phase: "idle", message: "Typeless 启动超时"))
+            BridgeStatusCenter.shared.lastError = "Typeless launch timed out"
+            log("Typeless auto-launch timed out before shortcut registration")
+            return
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            self?.waitForTypelessShortcutRegistration(deadline: deadline)
+        }
     }
 
     private func handleTypelessStopStatus(reason: String) {
@@ -3728,7 +3820,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         BridgeStatusCenter.shared.typelessStatus = faultState.message
         BridgeStatusCenter.shared.lastError = reason
         if stopTypeless && isTypelessRunning() {
-            postTypelessToggleForFault()
+            _ = postTypelessPrimaryShortcut(reason: "microphone fault stop", suppressMicrophoneWake: true)
         }
         if statusCharacteristic != nil {
             write(faultState)
@@ -3750,7 +3842,8 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         log("microphone session fault cleared for retry source=\(source)")
     }
 
-    private func postTypelessToggleForFault() {
+    @discardableResult
+    private func postTypelessPrimaryShortcut(reason: String, suppressMicrophoneWake: Bool) -> Bool {
         let binding = SettingsStore.shared.settings.leftKey
         guard let source = CGEventSource(stateID: .hidSystemState),
               let down = CGEvent(keyboardEventSource: source,
@@ -3759,16 +3852,21 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
               let up = CGEvent(keyboardEventSource: source,
                                virtualKey: CGKeyCode(binding.macKeyCode),
                                keyDown: false) else {
-            log("microphone fault could not synthesize Typeless stop shortcut")
-            return
+            log("could not synthesize Typeless shortcut reason=\(reason)")
+            return false
         }
-        suppressNextMicrophoneShortcut = true
+        if suppressMicrophoneWake {
+            suppressNextMicrophoneShortcut = true
+        }
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-            self?.suppressNextMicrophoneShortcut = false
+        if suppressMicrophoneWake {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                self?.suppressNextMicrophoneShortcut = false
+            }
         }
-        log("microphone fault sent Typeless stop shortcut \(binding.name)")
+        log("sent Typeless shortcut \(binding.name) reason=\(reason)")
+        return true
     }
 }
 

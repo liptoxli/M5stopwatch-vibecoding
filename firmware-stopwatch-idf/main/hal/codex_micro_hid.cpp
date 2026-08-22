@@ -27,7 +27,7 @@
 namespace {
 
 constexpr const char* kTag = "Codex-Micro-HID";
-constexpr const char* kFirmwareVersion = "0.10.2-stopwatch";
+constexpr const char* kFirmwareVersion = "0.10.4-stopwatch";
 constexpr uint8_t kKeyboardReportId = 1;
 constexpr uint8_t kConsumerReportId = 2;
 constexpr uint8_t kReportId = 6;
@@ -179,6 +179,11 @@ std::string g_rpc_buffer;
 std::array<ThreadSlot, kThreadSlotCount> g_thread_slots = {};
 uint32_t g_thread_status_sequence = 0;
 bool g_host_rpc_seen = false;
+uint32_t g_vendor_output_frames = 0;
+uint32_t g_notify_attempts = 0;
+uint32_t g_notify_successes = 0;
+uint32_t g_notify_failures = 0;
+bool g_warned_unsubscribed_notify = false;
 
 Attribute attribute_from_arg(void* arg)
 {
@@ -192,27 +197,48 @@ int append_value(os_mbuf* om, const void* data, size_t length)
 
 bool notify_body(const uint8_t* body, size_t length)
 {
-    if (!body || length != kReportBodySize || !g_input_subscribed ||
+    if (!body || length != kReportBodySize ||
         g_input_handle == 0 || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
         return false;
+    }
+
+    ++g_notify_attempts;
+    if (!g_input_subscribed && !g_warned_unsubscribed_notify) {
+        // The macOS HID stack can keep the ATT notification path active while
+        // the last local SUBSCRIBE event is stale or missing after a cached BLE
+        // reconnect.  ble_gatts_notify_custom() is the source of truth: it
+        // validates the live connection and returns the actual delivery result.
+        // Do not suppress an RPC reply solely because our cached flag is false.
+        ESP_LOGW(kTag,
+                 "vendor notify attempt without cached subscription: attempt=%lu",
+                 static_cast<unsigned long>(g_notify_attempts));
+        g_warned_unsubscribed_notify = true;
     }
 
     os_mbuf* om = ble_hs_mbuf_from_flat(body, length);
     if (!om) {
         ESP_LOGW(kTag, "input notify allocation failed");
+        ++g_notify_failures;
         return false;
     }
     const int rc = ble_gatts_notify_custom(g_conn_handle, g_input_handle, om);
     if (rc != 0) {
-        ESP_LOGW(kTag, "input notify failed: rc=%d", rc);
+        ++g_notify_failures;
+        ESP_LOGW(kTag,
+                 "input notify failed: rc=%d subscribed=%d attempts=%lu failures=%lu",
+                 rc,
+                 g_input_subscribed,
+                 static_cast<unsigned long>(g_notify_attempts),
+                 static_cast<unsigned long>(g_notify_failures));
         return false;
     }
+    ++g_notify_successes;
     return true;
 }
 
 bool send_json(const std::string& json)
 {
-    if (!g_input_subscribed || !g_tx_mutex ||
+    if (!g_tx_mutex ||
         xSemaphoreTake(g_tx_mutex, pdMS_TO_TICKS(250)) != pdTRUE) {
         return false;
     }
@@ -241,24 +267,32 @@ bool send_json(const std::string& json)
 }
 
 template <typename TDoc>
-void send_response(JsonVariantConst id, const TDoc& response)
+bool send_response(JsonVariantConst id, const TDoc& response)
 {
     if (id.isNull()) {
-        return;
+        return false;
     }
-    DynamicJsonDocument envelope(768);
+    JsonDocument envelope;
     envelope["id"] = id;
     envelope["result"] = response.template as<JsonVariantConst>();
     std::string json;
     serializeJson(envelope, json);
-    send_json(json);
+    const bool sent = send_json(json);
+    ESP_LOGI(kTag,
+             "RPC response: bytes=%u sent=%d subscribed=%d notify=%lu/%lu",
+             static_cast<unsigned>(json.size()),
+             sent,
+             g_input_subscribed,
+             static_cast<unsigned long>(g_notify_successes),
+             static_cast<unsigned long>(g_notify_attempts));
+    return sent;
 }
 
-void send_success(JsonVariantConst id)
+bool send_success(JsonVariantConst id)
 {
-    StaticJsonDocument<64> result;
+    JsonDocument result;
     result["ok"] = true;
-    send_response(id, result);
+    return send_response(id, result);
 }
 
 void update_thread_status(JsonArrayConst values)
@@ -351,26 +385,32 @@ void handle_rpc(const JsonDocument& request)
         method = request["m"] | "";
     }
     const JsonVariantConst id = request["id"];
-    ESP_LOGD(kTag, "RPC method=%s", method);
-    if (method[0] != '\0') {
-        mark_host_communicating();
-    }
+    ESP_LOGI(kTag,
+             "RPC request: method=%s id=%ld subscribed=%d frames=%lu",
+             method,
+             id.is<long>() ? id.as<long>() : -1L,
+             g_input_subscribed,
+             static_cast<unsigned long>(g_vendor_output_frames));
 
     if (std::strcmp(method, "sys.version") == 0) {
-        StaticJsonDocument<96> result;
+        JsonDocument result;
         result["version"] = kFirmwareVersion;
-        send_response(id, result);
+        if (send_response(id, result)) {
+            mark_host_communicating();
+        }
         return;
     }
 
     if (std::strcmp(method, "device.status") == 0) {
-        StaticJsonDocument<192> result;
+        JsonDocument result;
         result["version"] = kFirmwareVersion;
         result["profile_index"] = 0;
         result["layer_index"] = 1;
         result["battery"] = std::min<uint8_t>(100, GetHAL().getBatteryLevel());
         result["is_charging"] = GetHAL().isBatteryCharging();
-        send_response(id, result);
+        if (send_response(id, result)) {
+            mark_host_communicating();
+        }
         return;
     }
 
@@ -379,26 +419,32 @@ void handle_rpc(const JsonDocument& request)
         if (params.is<JsonArrayConst>()) {
             update_thread_status(params.as<JsonArrayConst>());
         }
-        send_success(id);
+        if (send_success(id)) {
+            mark_host_communicating();
+        }
         return;
     }
 
     if (std::strcmp(method, "v.oai.rgbcfg") == 0 ||
         std::strcmp(method, "lights.preview") == 0 ||
         std::strcmp(method, "host.focused_app") == 0) {
-        send_success(id);
+        if (send_success(id)) {
+            mark_host_communicating();
+        }
         return;
     }
 
     if (!id.isNull()) {
-        DynamicJsonDocument envelope(192);
+        JsonDocument envelope;
         envelope["id"] = id;
-        JsonObject error = envelope.createNestedObject("error");
+        JsonObject error = envelope["error"].to<JsonObject>();
         error["code"] = -32601;
         error["message"] = "Method not found";
         std::string json;
         serializeJson(envelope, json);
-        send_json(json);
+        if (send_json(json)) {
+            mark_host_communicating();
+        }
     }
 }
 
@@ -451,7 +497,7 @@ void ingest_output_frame(const RxFrame& frame)
     }
     g_rpc_buffer.append(payload + json_start, append_length);
 
-    DynamicJsonDocument request(kMaxRpcBuffer);
+    JsonDocument request;
     const DeserializationError error = deserializeJson(request, g_rpc_buffer);
     if (error == DeserializationError::IncompleteInput) {
         return;
@@ -546,6 +592,12 @@ int gatt_access(uint16_t, uint16_t, ble_gatt_access_ctxt* ctxt, void* arg)
                 return BLE_ATT_ERR_INSUFFICIENT_RES;
             }
             frame.length = static_cast<uint8_t>(output_length);
+            ++g_vendor_output_frames;
+            ESP_LOGD(kTag,
+                     "vendor output report: len=%u first=0x%02x frames=%lu",
+                     static_cast<unsigned>(output_length),
+                     output_length > 0 ? frame.data[0] : 0,
+                     static_cast<unsigned long>(g_vendor_output_frames));
             g_output_report.fill(0);
             std::memcpy(g_output_report.data(), frame.data, output_length);
             if (!g_rx_queue || xQueueSend(g_rx_queue, &frame, 0) != pdTRUE) {
@@ -814,6 +866,11 @@ void on_connected(uint16_t conn_handle)
 {
     g_conn_handle = conn_handle;
     g_input_subscribed = false;
+    g_warned_unsubscribed_notify = false;
+    g_vendor_output_frames = 0;
+    g_notify_attempts = 0;
+    g_notify_successes = 0;
+    g_notify_failures = 0;
     g_rpc_buffer.clear();
     reset_thread_status();
 }
@@ -822,6 +879,7 @@ void on_disconnected()
 {
     g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
     g_input_subscribed = false;
+    g_warned_unsubscribed_notify = false;
     g_rpc_buffer.clear();
     reset_thread_status();
     if (g_rx_queue) {
@@ -839,6 +897,9 @@ void on_gap_event(const ble_gap_event& event)
             xSemaphoreGive(g_state_mutex);
         }
         g_input_subscribed = subscribed;
+        if (subscribed) {
+            g_warned_unsubscribed_notify = false;
+        }
         ESP_LOGI(kTag, "Codex Micro input subscription=%d", g_input_subscribed);
     }
 }
@@ -909,7 +970,12 @@ bool send_radial(float angle, float distance)
 
 bool ready()
 {
-    return g_conn_handle != BLE_HS_CONN_HANDLE_NONE && g_input_handle != 0 && g_input_subscribed;
+    // macOS can preserve a working HOGP notification path across a cached BLE
+    // reconnect without replaying the local SUBSCRIBE event.  The cached flag
+    // may therefore be false while Codex RPC requests and replies are healthy.
+    // Let send_json()/notify_body() perform the authoritative live transport
+    // check instead of rejecting Agent, encoder, and radial actions early.
+    return g_conn_handle != BLE_HS_CONN_HANDLE_NONE && g_input_handle != 0;
 }
 
 StatusSummary status_summary()

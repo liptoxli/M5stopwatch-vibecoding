@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-08-22
+
+### Changed
+
+- Codex Vendor HID 使用实际连接句柄和 GATT 通知结果判断通道可用性，不再仅依赖可能滞后的本地订阅标志。
+- RPC 请求和回复日志增加帧数、通知尝试和成功计数，宿主通讯状态只在回复成功后更新。
+- 更新 ArduinoJson 文档用法，清理旧 `StaticJsonDocument` / `DynamicJsonDocument` 带来的构建警告。
+
+### Fixed
+
+- 修复 macOS 在缓存 BLE 重连后没有重放本地 SUBSCRIBE 事件时，设备明明可以完成 `device.status` 等 RPC，却仍显示 `Codex Micro Offline` 的问题。
+- 修复上述误判造成的四个 Agent 触摸点被提前拦截、Codex 端无法收到操作的问题。
+
+### Verified
+
+- ESP-IDF v5.5.4 全量构建和 USB 刷写通过，启动版本确认为 v0.10.4。
+- 实机日志确认 `v.oai.rgbcfg`、`v.oai.thstatus` 和 `device.status` 请求均成功回复；后续连接、按键和语音输入正常。
+
 ## [0.10.2] - 2026-08-22
 
 ### Changed
