@@ -2705,7 +2705,12 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         guard central.state == .poweredOn else { return }
         let services = hidServiceOnly ? [hidServiceUUID] : nil
         central.scanForPeripherals(withServices: services,
-                                   options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+                                   // The first advertisement often arrives before macOS has
+                                   // finished exposing the native HID device. Keep duplicate
+                                   // callbacks enabled only while scanning so the custom audio
+                                   // service can attach immediately after the HID hand-off,
+                                   // instead of waiting for the five-second health loop.
+                                   options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
     }
 
     private func connectAfterNativeHIDSettles(_ candidate: CBPeripheral,

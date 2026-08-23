@@ -1414,6 +1414,11 @@ bool voice_session_interrupted()
     return ble_microphone::voice_session_interrupted();
 }
 
+bool consume_voice_start_timeout()
+{
+    return ble_microphone::consume_voice_start_timeout();
+}
+
 void clear_voice_session_interruption()
 {
     ble_microphone::clear_voice_session_interruption();
@@ -1444,6 +1449,14 @@ void send_typeless_option(ButtonAction action)
         set_host_status("Typeless input up");
     }
     release_keyboard();
+}
+
+void cancel_typeless_input_after_microphone_timeout()
+{
+    load_host_input_config();
+    set_host_status("Microphone start timeout");
+    send_hid_binding_tap(g_primary_binding);
+    mclog::tagInfo(kTag, "Typeless input cancelled after microphone start timeout");
 }
 
 void send_codex_enter()

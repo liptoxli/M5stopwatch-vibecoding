@@ -2,6 +2,22 @@
 
 Mac Bridge 使用独立语义化版本。固件与 Bridge 的兼容版本关系见仓库根目录 [README](../../README.md#版本历史)。
 
+## [1.3.4] - 2026-08-23
+
+### Changed
+
+- Bridge 只在扫描阶段允许重复 BLE 广播回调，让 macOS 原生 IOHID 设备稳定后能立即再次评估同一台 StopWatch。
+
+### Fixed
+
+- 修复第一个广播比原生 HID 准备更早到达时，Bridge 忽略这次发现后只能等待 5 秒健康检查才接入 Companion 和麦克风服务的问题。
+- 配合固件 v0.10.5 的录音意图锁存，修复设备开机后快速按 A 时首次录音无音频的时序窗口。
+
+### Verified
+
+- Swift 构建、稳定本地签名、LaunchAgent 安装和自动重连通过，安装版本确认为 v1.3.4。
+- 实机验收确认 StopWatch 开机后麦克风可自动接入，无需手动关闭再开启 Bridge 麦克风。
+
 ## [1.3.3] - 2026-08-22
 
 ### Changed
@@ -229,6 +245,8 @@ Mac Bridge 使用独立语义化版本。固件与 Bridge 的兼容版本关系�
 - 支持 `M5Codex-*` 连接、Codex 额度推送、输入模式和按键配置同步。
 - 支持 Typeless 状态观察、LaunchAgent 安装和 arm64 ZIP 发布包。
 
+[1.3.4]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v1.3.4
+[1.3.3]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v1.3.3
 [1.3.2]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v1.3.2
 [1.3.1]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v1.3.1
 [1.3.0]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v1.3.0

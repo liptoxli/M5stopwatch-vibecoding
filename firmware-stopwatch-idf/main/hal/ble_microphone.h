@@ -15,6 +15,7 @@ bool is_streaming();
 void begin_voice_input();
 void end_voice_input();
 bool voice_session_interrupted();
+bool consume_voice_start_timeout();
 void clear_voice_session_interruption();
 
 }  // namespace ble_microphone

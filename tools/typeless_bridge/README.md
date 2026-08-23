@@ -2,7 +2,7 @@
 
 StopWatch BLE Bridge is the macOS companion app for the M5 StopWatch Codex firmware.
 
-Current version: **v1.3.2**. Full version history: [CHANGELOG.md](CHANGELOG.md).
+Current version: **v1.3.4**. Full version history: [CHANGELOG.md](CHANGELOG.md).
 
 It provides local functions including:
 
@@ -199,14 +199,14 @@ tools/typeless_bridge/build_stopwatch_ble_bridge.sh
 ## Package Release
 
 ```bash
-tools/typeless_bridge/package_release.sh 1.3.2
+tools/typeless_bridge/package_release.sh 1.3.4
 ```
 
 This creates:
 
 ```text
-dist/StopWatch-BLE-Bridge-1.3.2-macOS-arm64.zip
-dist/StopWatch-BLE-Bridge-1.3.2-macOS-arm64.zip.sha256
+dist/StopWatch-BLE-Bridge-1.3.4-macOS-arm64.zip
+dist/StopWatch-BLE-Bridge-1.3.4-macOS-arm64.zip.sha256
 ```
 
 The release package contains only the app bundle. It does not install the LaunchAgent or start the app automatically.
@@ -215,7 +215,7 @@ To build the product installer that installs the app, login LaunchAgent, and
 `M5 StopWatch Mic` Core Audio driver together:
 
 ```bash
-tools/typeless_bridge/package_product_installer.sh 1.3.2
+tools/typeless_bridge/package_product_installer.sh 1.3.4
 ```
 
 The `.pkg` requires administrator authorization because it writes the audio

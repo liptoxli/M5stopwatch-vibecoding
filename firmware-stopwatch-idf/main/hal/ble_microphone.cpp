@@ -28,6 +28,7 @@ constexpr std::uint8_t kCodecImaAdpcm = 1;
 constexpr std::size_t kPacketHeaderSize = 14;
 constexpr std::size_t kPacketSize = kPacketHeaderSize + ima_adpcm::kEncodedBytesPerBlock;
 constexpr std::uint32_t kStopTailMs = 400;
+constexpr std::uint32_t kPendingVoiceTimeoutMs = 6000;
 
 enum class StreamMode : std::uint8_t {
     Disabled = 0,
@@ -48,8 +49,11 @@ std::atomic<bool> g_connected = false;
 std::atomic<bool> g_audio_subscribed = false;
 std::atomic<bool> g_stats_subscribed = false;
 std::atomic<StreamMode> g_stream_mode = StreamMode::Disabled;
+std::atomic<bool> g_voice_intent = false;
 std::atomic<bool> g_voice_requested = false;
 std::atomic<bool> g_voice_session_interrupted = false;
+std::atomic<bool> g_voice_start_timeout_pending = false;
+std::atomic<TickType_t> g_voice_intent_started_at = 0;
 std::atomic<TickType_t> g_stop_at_tick = 0;
 std::atomic<std::uint32_t> g_stream_generation = 0;
 std::atomic<bool> g_capture_task_started = false;
@@ -100,22 +104,39 @@ void wake_capture_task()
     }
 }
 
-void request_voice_start()
+void start_latched_voice_if_ready()
 {
-    if (g_stream_mode.load() != StreamMode::Armed || !g_connected.load() || !g_audio_subscribed.load()) {
+    if (!g_voice_intent.load() || g_stream_mode.load() != StreamMode::Armed ||
+        !g_connected.load() || !g_audio_subscribed.load()) {
         return;
     }
     g_stop_at_tick = 0;
+    g_voice_intent_started_at = 0;
     g_voice_session_interrupted = false;
     if (!g_voice_requested.exchange(true)) {
         ++g_stream_generation;
+        ESP_LOGI(kTag, "latched voice request started after audio path became ready");
     }
     wake_capture_task();
 }
 
-void request_voice_stop(bool immediate)
+void request_voice_start()
+{
+    if (!g_voice_intent.exchange(true)) {
+        g_voice_intent_started_at = xTaskGetTickCount();
+        g_voice_start_timeout_pending = false;
+        ESP_LOGI(kTag, "voice intent latched: connected=%d subscribed=%d mode=%u",
+                 g_connected.load(),
+                 g_audio_subscribed.load(),
+                 static_cast<unsigned>(g_stream_mode.load()));
+    }
+    start_latched_voice_if_ready();
+}
+
+void stop_voice_stream(bool immediate)
 {
     if (!g_voice_requested.load()) {
+        g_stop_at_tick = 0;
         return;
     }
     if (immediate) {
@@ -125,6 +146,34 @@ void request_voice_stop(bool immediate)
         return;
     }
     g_stop_at_tick = xTaskGetTickCount() + pdMS_TO_TICKS(kStopTailMs);
+}
+
+void request_voice_stop(bool immediate)
+{
+    g_voice_intent = false;
+    g_voice_intent_started_at = 0;
+    stop_voice_stream(immediate);
+}
+
+void apply_voice_start_timeout()
+{
+    const TickType_t started_at = g_voice_intent_started_at.load();
+    if (!g_voice_intent.load() || g_voice_requested.load() || started_at == 0) {
+        return;
+    }
+    if (xTaskGetTickCount() - started_at < pdMS_TO_TICKS(kPendingVoiceTimeoutMs)) {
+        return;
+    }
+
+    g_voice_intent = false;
+    g_voice_intent_started_at = 0;
+    g_voice_start_timeout_pending = true;
+    g_voice_session_interrupted = true;
+    ESP_LOGE(kTag,
+             "voice start timed out waiting for audio path: connected=%d subscribed=%d mode=%u",
+             g_connected.load(),
+             g_audio_subscribed.load(),
+             static_cast<unsigned>(g_stream_mode.load()));
 }
 
 void apply_stop_deadline()
@@ -246,6 +295,7 @@ void capture_task(void*)
     std::array<std::int16_t, ima_adpcm::kSamplesPerBlock> frame = {};
     std::uint32_t active_generation = 0;
     while (true) {
+        apply_voice_start_timeout();
         apply_stop_deadline();
         if (!ble_microphone::is_streaming()) {
             release_stream_audio();
@@ -340,6 +390,8 @@ int gatt_access(std::uint16_t, std::uint16_t, ble_gatt_access_ctxt* context, voi
             break;
         case 1:
             g_stream_mode = StreamMode::Continuous;
+            g_voice_intent = false;
+            g_voice_intent_started_at = 0;
             g_stop_at_tick = 0;
             g_voice_requested = false;
             ++g_stream_generation;
@@ -347,7 +399,8 @@ int gatt_access(std::uint16_t, std::uint16_t, ble_gatt_access_ctxt* context, voi
             break;
         case 2:
             g_stream_mode = StreamMode::Armed;
-            request_voice_stop(true);
+            stop_voice_stream(true);
+            start_latched_voice_if_ready();
             break;
         case 3:
             request_voice_start();
@@ -371,15 +424,47 @@ int gatt_access(std::uint16_t, std::uint16_t, ble_gatt_access_ctxt* context, voi
 }
 
 const ble_gatt_chr_def kCharacteristics[] = {
-    {.uuid = &kControlUuid.u, .access_cb = gatt_access, .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP},
-    {.uuid = &kAudioUuid.u, .access_cb = gatt_access, .flags = BLE_GATT_CHR_F_NOTIFY, .val_handle = &g_audio_handle},
-    {.uuid = &kStatsUuid.u, .access_cb = gatt_access, .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY, .val_handle = &g_stats_handle},
-    {0},
+    {
+        .uuid = &kControlUuid.u,
+        .access_cb = gatt_access,
+        .arg = nullptr,
+        .descriptors = nullptr,
+        .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
+        .min_key_size = 0,
+        .val_handle = nullptr,
+        .cpfd = nullptr,
+    },
+    {
+        .uuid = &kAudioUuid.u,
+        .access_cb = gatt_access,
+        .arg = nullptr,
+        .descriptors = nullptr,
+        .flags = BLE_GATT_CHR_F_NOTIFY,
+        .min_key_size = 0,
+        .val_handle = &g_audio_handle,
+        .cpfd = nullptr,
+    },
+    {
+        .uuid = &kStatsUuid.u,
+        .access_cb = gatt_access,
+        .arg = nullptr,
+        .descriptors = nullptr,
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+        .min_key_size = 0,
+        .val_handle = &g_stats_handle,
+        .cpfd = nullptr,
+    },
+    {},
 };
 
 const ble_gatt_svc_def kServices[] = {
-    {.type = BLE_GATT_SVC_TYPE_PRIMARY, .uuid = &kServiceUuid.u, .characteristics = kCharacteristics},
-    {0},
+    {
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = &kServiceUuid.u,
+        .includes = nullptr,
+        .characteristics = kCharacteristics,
+    },
+    {},
 };
 
 }  // namespace
@@ -429,14 +514,17 @@ void on_connected(std::uint16_t connection_handle)
 
 void on_disconnected()
 {
-    if (g_voice_requested.load() && g_stop_at_tick.load() == 0) {
+    if ((g_voice_intent.load() || g_voice_requested.load()) && g_stop_at_tick.load() == 0) {
         g_voice_session_interrupted = true;
     }
     g_connected = false;
     g_audio_subscribed = false;
     g_stats_subscribed = false;
     g_stream_mode = StreamMode::Disabled;
+    g_voice_intent = false;
     g_voice_requested = false;
+    g_voice_intent_started_at = 0;
+    g_voice_start_timeout_pending = false;
     g_stop_at_tick = 0;
     g_connection_handle = BLE_HS_CONN_HANDLE_NONE;
     // Do not touch Codec/I2S from the NimBLE GAP callback. The capture task
@@ -450,6 +538,9 @@ void on_gap_event(const ble_gap_event& event)
         if (event.subscribe.attr_handle == g_audio_handle) {
             g_audio_subscribed = event.subscribe.cur_notify != 0;
             ESP_LOGI(kTag, "audio notifications: %s", g_audio_subscribed ? "on" : "off");
+            if (g_audio_subscribed.load()) {
+                start_latched_voice_if_ready();
+            }
         } else if (event.subscribe.attr_handle == g_stats_handle) {
             g_stats_subscribed = event.subscribe.cur_notify != 0;
         }
@@ -488,6 +579,11 @@ void end_voice_input()
 bool voice_session_interrupted()
 {
     return g_voice_session_interrupted.load();
+}
+
+bool consume_voice_start_timeout()
+{
+    return g_voice_start_timeout_pending.exchange(false);
 }
 
 void clear_voice_session_interruption()

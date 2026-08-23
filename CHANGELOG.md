@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [0.10.5] - 2026-08-23
+
+### Changed
+
+- A 键开始语音时先锁存录音意图，再等待 BLE 连接、音频通知订阅和 Bridge `Armed` 状态全部就绪。
+- BLE 麦克风 GATT 定义显式初始化所有字段，清理 ESP-IDF v5.5.4 下的相关编译警告。
+
+### Fixed
+
+- 修复 StopWatch 开机后原生 HID 已经可用，但 Mac Bridge 的自定义音频服务尚未就绪时，第一次 A 键录音请求被丢弃、麦克风不传流的问题。
+- 如果音频通道 6 秒内仍无法就绪，固件会取消本次 Typeless 输入并进入录音异常提示，不再留下“看起来在录音、实际没有音频”的状态。
+
+### Verified
+
+- ESP-IDF v5.5.4 重新配置与全量构建通过，应用分区刷写和 Flash 哈希校验成功，串口确认实际启动版本为 v0.10.5。
+- 受控重启时约 4.4 秒完成 BLE 音频通知订阅；实机验收确认开机后麦克风可自动接入并正常语音输入。
+
 ## [0.10.4] - 2026-08-22
 
 ### Changed
@@ -286,7 +303,9 @@
 - 新增 Typeless/微信输入法输入模式、A/B 键绑定、摇晃清除和 BLE HID 输入。
 - 新增 Codex 额度 BLE 推送、隐私与安全说明、功能说明和 Pet 替换文档。
 
-[Unreleased]: https://github.com/liptoxli/M5stopwatch-vibecoding/compare/v0.10.2...HEAD
+[Unreleased]: https://github.com/liptoxli/M5stopwatch-vibecoding/compare/v0.10.5...HEAD
+[0.10.5]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.10.5
+[0.10.4]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.10.4
 [0.10.2]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.10.2
 [0.10.1]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.10.1
 [0.10.0]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.10.0

@@ -13,8 +13,8 @@
 
 | 组件 | 版本 | 已验证能力 |
 | --- | --- | --- |
-| StopWatch 固件 | v0.10.4 | 两套 UI、A/B 键、摇晃、实时 BLE 麦克风、额度、四小时热力图、四 Agent、推理滑动、中心四向 Radial、持久化配对保护与 Vendor HID 在线自校验 |
-| macOS Bridge | v1.3.3 | BLE Companion、虚拟麦克风、Typeless 状态、额度与活动同步、原生 HID 稳定交接、麦克风录音前自愈、Typeless 自动拉起、推理等级同步与回退 |
+| StopWatch 固件 | v0.10.5 | 两套 UI、A/B 键、摇晃、实时 BLE 麦克风、额度、四小时热力图、四 Agent、推理滑动、中心四向 Radial、持久化配对保护、Vendor HID 在线自校验与开机录音意图锁存 |
+| macOS Bridge | v1.3.4 | BLE Companion、虚拟麦克风、Typeless 状态、额度与活动同步、原生 HID 稳定交接、快速重新发现、麦克风录音前自愈、Typeless 自动拉起、推理等级同步与回退 |
 | 虚拟麦克风 | `M5 StopWatch Mic` | 16 kHz 单声道 PCM 输入，由 Bridge 写入本机 Core Audio 驱动 |
 
 以下能力已经完成真实设备验收，可以作为回归基线：
@@ -178,6 +178,8 @@ Bridge 收到 `codex_reasoning:native_sync` 后延迟刷新确认标签。只有
 | 解码 PCM 速率 | `32 KB/s` |
 
 空闲时采用按需待机，不持续发送音频。开始语音前唤醒 Codec 和采集任务，停止时保留短尾段。Bridge 对丢帧填静音，但如果录音中发生明确断线或持续断流，会终止本次会话并提示用户重新录制，不尝试把缺失中段静默拼接起来。
+
+v0.10.5 起，A 键开始语音时先锁存用户意图。如果 macOS 的自定义音频服务尚未完成订阅，固件会在 `Armed + connected + subscribed` 都成立后自动开流，而不是丢弃第一次 A 键。等待超过 6 秒则取消本次 Typeless 输入并进入既有的录音异常提示，防止界面显示录音但没有音频。
 
 ### 4.6 活动热力图与额度
 

@@ -30,9 +30,11 @@ bool disconnect_current();
 bool is_typeless_input_mode();
 void set_voice_capture_active(bool active);
 bool voice_session_interrupted();
+bool consume_voice_start_timeout();
 void clear_voice_session_interruption();
 
 void send_typeless_option(ButtonAction action);
+void cancel_typeless_input_after_microphone_timeout();
 void send_codex_enter();
 void send_confirm_long_press();
 void send_shake_action();

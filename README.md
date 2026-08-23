@@ -5,8 +5,8 @@
 </p>
 
 <p align="center">
-  <img alt="Firmware v0.10.4" src="https://img.shields.io/badge/firmware-v0.10.4-6f5cff">
-  <img alt="Bridge v1.3.3" src="https://img.shields.io/badge/macOS%20Bridge-v1.3.3-35b8ff">
+  <img alt="Firmware v0.10.5" src="https://img.shields.io/badge/firmware-v0.10.5-6f5cff">
+  <img alt="Bridge v1.3.4" src="https://img.shields.io/badge/macOS%20Bridge-v1.3.4-35b8ff">
   <img alt="ESP32-S3" src="https://img.shields.io/badge/hardware-ESP32--S3-ef6c35">
   <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-55f36a">
 </p>
@@ -21,7 +21,7 @@ M5 StopWatch for Vibe Coding 为 Codex、ChatGPT、Claude Code 和 IDE 工作流
 
 ## 项目现状
 
-当前版本为 **固件 v0.10.4 / macOS Bridge v1.3.3**。语音输入、虚拟麦克风、BLE HID、原生 Codex Micro 兼容交互和圆屏触摸均已在真实设备上完成端到端验证。本次维护版修复了 Agent 通道实际在线却被设备误判为 `Codex Micro Offline`、Typeless 未运行时 A 键只触发系统提示音，以及虚拟麦克风偶发需手动关闭后重新开启才能恢复的问题。
+当前版本为 **固件 v0.10.5 / macOS Bridge v1.3.4**。语音输入、虚拟麦克风、BLE HID、原生 Codex Micro 兼容交互和圆屏触摸均已在真实设备上完成端到端验证。本次维护版专门修复开机初期的麦克风时序：即使 A 键早于 Mac Bridge 的音频通道就绪，设备也会保留这次录音意图并在订阅完成后自动开流；Bridge 同时缩短了原生 HID 交接后的自动接入等待。
 
 | 能力 | 当前状态 |
 | --- | --- |
@@ -38,7 +38,7 @@ M5 StopWatch for Vibe Coding 为 Codex、ChatGPT、Claude Code 和 IDE 工作流
 | 断线与音频异常处理 | 已完成，异常时结束本次听写并提示重新录制 |
 | 省电、息屏和自动关机 | 已完成，日常混合使用约为 5 小时级 |
 
-当前版本适合实机体验、二次开发和日常语音输入。电量百分比仍以电池电压估算，低电量区会偏保守；因此页面中的续航数字是实测范围，不是实验室标称值。首次从 v0.9.x 升级到 v0.10.x 时，由于 HID 描述符发生变化，需要在 macOS 中忽略旧的 `M5Codex-*` 并重新配对一次；已经在 v0.10.x 正常配对的设备升级 v0.10.4 时无需再次忽略设备。
+当前版本适合实机体验、二次开发和日常语音输入。电量百分比仍以电池电压估算，低电量区会偏保守；因此页面中的续航数字是实测范围，不是实验室标称值。首次从 v0.9.x 升级到 v0.10.x 时，由于 HID 描述符发生变化，需要在 macOS 中忽略旧的 `M5Codex-*` 并重新配对一次；已经在 v0.10.x 正常配对的设备升级 v0.10.5 时无需再次忽略设备。
 
 ## 两套界面
 
@@ -162,6 +162,7 @@ Bridge 支持 Typeless 和微信输入法两种输入路径，也可以配合任
 
 | 日期 | 固件 | Mac Bridge | 主要更新 |
 | --- | --- | --- | --- |
+| 2026-08-23 | v0.10.5 | v1.3.4 | 开机后首次 A 键可等待音频通道就绪并自动开流；Bridge 更快接入 Companion 与虚拟麦克风 |
 | 2026-08-22 | v0.10.4 | v1.3.3 | 修复 Agent 在线误判；A 键可自动拉起 Typeless，并在录音前恢复虚拟麦克风输出与 BLE 音频订阅 |
 | 2026-08-22 | v0.10.2 | v1.3.2 | 永久修复重启后 bond 丢失；扩大 BLE 订阅容量，并让 Bridge 等待原生 HID 稳定后再接入音频与状态服务 |
 | 2026-08-21 | v0.10.1 | v1.3.1 | 修复首次连接竞争、重复认证提示，以及 BLE 重连或空闲后虚拟麦克风无声 |

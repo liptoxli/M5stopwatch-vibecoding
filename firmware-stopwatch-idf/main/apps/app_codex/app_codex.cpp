@@ -97,6 +97,12 @@ void AppCodex::onRunning()
     handleBluetoothKeys();
     handleTouchControls();
     const uint32_t now = GetHAL().millis();
+    if (ble_bridge::consume_voice_start_timeout()) {
+        if (ble_bridge::is_typeless_input_mode()) {
+            ble_bridge::cancel_typeless_input_after_microphone_timeout();
+        }
+        mclog::tagInfo(getAppInfo().name, "Pending microphone start timed out; host input cancelled");
+    }
     if (ble_bridge::voice_session_interrupted()) {
         enterVoiceInterrupted(now);
     }

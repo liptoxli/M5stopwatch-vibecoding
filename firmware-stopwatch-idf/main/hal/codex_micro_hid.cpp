@@ -27,7 +27,7 @@
 namespace {
 
 constexpr const char* kTag = "Codex-Micro-HID";
-constexpr const char* kFirmwareVersion = "0.10.4-stopwatch";
+constexpr const char* kFirmwareVersion = "0.10.5-stopwatch";
 constexpr uint8_t kKeyboardReportId = 1;
 constexpr uint8_t kConsumerReportId = 2;
 constexpr uint8_t kReportId = 6;
