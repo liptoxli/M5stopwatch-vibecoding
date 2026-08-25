@@ -2127,6 +2127,8 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private var microphoneRecordingStartedAt: Date?
     private var microphoneDroppedBaseline: UInt32 = 0
     private var microphoneDroppedBaselineAt: Date?
+    private var lastMicrophoneTransportFaultAt: Date?
+    private var microphoneTransportRecoveryWorkItem: DispatchWorkItem?
     private var lastBridgeConfigPayload: String?
     private var lastSentCodexUnreadCount: Int?
     private var lastSentCodexTasks: [CodexUnreadTask]?
@@ -2853,6 +2855,8 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         microphoneControlQueue.removeAll()
         activeMicrophoneControlCommand = nil
         microphoneControlWriteInFlight = false
+        microphoneTransportRecoveryWorkItem?.cancel()
+        microphoneTransportRecoveryWorkItem = nil
         reasoningFallbackQueue.removeAll()
         reasoningFallbackInFlight = false
     }
@@ -3790,26 +3794,39 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
            health.deviceStreaming,
            packetAge >= microphoneStreamFaultSeconds {
             triggerMicrophoneSessionFault(reason: String(format: "audio packets stalled for %.2fs", packetAge),
-                                          stopTypeless: true)
+                                          stopTypeless: true,
+                                          recoverTransport: true)
             return
         }
         if health.latestPacketGapCount >= microphoneFatalPacketGap {
             triggerMicrophoneSessionFault(reason: "audio packet gap reached \(health.latestPacketGapCount) frames",
-                                          stopTypeless: true)
+                                          stopTypeless: true,
+                                          recoverTransport: true)
+            return
+        }
+        if health.devicePacketsDropped < microphoneDroppedBaseline {
+            // Firmware counters restart at the beginning of each voice
+            // generation. Rebase before calculating this session's delta.
+            microphoneDroppedBaseline = health.devicePacketsDropped
+            microphoneDroppedBaselineAt = now
+            return
+        }
+        if health.devicePacketsDropped - microphoneDroppedBaseline >= microphoneFatalDroppedFrames {
+            triggerMicrophoneSessionFault(reason: "device dropped \(health.devicePacketsDropped - microphoneDroppedBaseline) frames",
+                                          stopTypeless: true,
+                                          recoverTransport: true)
             return
         }
         if let baselineAt = microphoneDroppedBaselineAt,
            now.timeIntervalSince(baselineAt) > 2.0 {
             microphoneDroppedBaseline = health.devicePacketsDropped
             microphoneDroppedBaselineAt = now
-        } else if health.devicePacketsDropped >= microphoneDroppedBaseline,
-                  health.devicePacketsDropped - microphoneDroppedBaseline >= microphoneFatalDroppedFrames {
-            triggerMicrophoneSessionFault(reason: "device dropped \(health.devicePacketsDropped - microphoneDroppedBaseline) frames",
-                                          stopTypeless: true)
         }
     }
 
-    private func triggerMicrophoneSessionFault(reason: String, stopTypeless: Bool) {
+    private func triggerMicrophoneSessionFault(reason: String,
+                                               stopTypeless: Bool,
+                                               recoverTransport: Bool = false) {
         guard !microphoneSessionFaulted else { return }
         microphoneSessionFaulted = true
         microphoneRecordingStartedAt = nil
@@ -3830,8 +3847,50 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         if statusCharacteristic != nil {
             write(faultState)
         }
+        if recoverTransport {
+            scheduleMicrophoneTransportRecovery(reason: reason)
+        }
         NSApp.requestUserAttention(.criticalRequest)
         log("microphone session fault: \(reason); automatic resume disabled")
+    }
+
+    private func scheduleMicrophoneTransportRecovery(reason: String) {
+        microphoneTransportRecoveryWorkItem?.cancel()
+        let now = Date()
+        let repeatedFault = lastMicrophoneTransportFaultAt.map {
+            now.timeIntervalSince($0) <= 60
+        } ?? false
+        lastMicrophoneTransportFaultAt = now
+
+        let work = DispatchWorkItem { [weak self] in
+            guard let self,
+                  let peripheral = self.peripheral,
+                  peripheral.state == .connected else { return }
+            self.microphoneTransportRecoveryWorkItem = nil
+
+            if repeatedFault {
+                self.microphoneResubscribePending = false
+                BridgeStatusCenter.shared.microphoneStatus = "Reconnecting BLE"
+                log("microphone transport fault repeated; rebuilding BLE connection reason=\(reason)")
+                self.central.cancelPeripheralConnection(peripheral)
+                return
+            }
+
+            guard let audio = self.microphoneAudioCharacteristic else { return }
+            self.microphoneResubscribePending = true
+            BridgeStatusCenter.shared.microphoneStatus = "Recovering stream"
+            if audio.isNotifying {
+                peripheral.setNotifyValue(false, for: audio)
+                log("microphone transport recovery: cycling audio subscription reason=\(reason)")
+            } else {
+                peripheral.setNotifyValue(true, for: audio)
+                log("microphone transport recovery: restoring audio subscription reason=\(reason)")
+            }
+        }
+        microphoneTransportRecoveryWorkItem = work
+        // Let stopVoice and the visible error reach the watch before changing
+        // the CCCD or reconnecting the BLE link shared with native HID.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
     }
 
     private func clearMicrophoneSessionFaultForRetry(source: String) {

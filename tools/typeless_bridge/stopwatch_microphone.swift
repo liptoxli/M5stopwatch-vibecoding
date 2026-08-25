@@ -81,6 +81,9 @@ struct MicrophonePipelineHealth {
     let deviceAudioSubscribed: Bool
     let devicePacketsSent: UInt32
     let devicePacketsDropped: UInt32
+    let deviceNotifyError: Int32
+    let deviceConsecutiveNotifyFailures: UInt32
+    let deviceFreeMbufs: UInt32
 }
 
 private final class MicrophoneRenderHeartbeat {
@@ -233,6 +236,9 @@ final class StopWatchMicrophonePipeline {
     private var deviceAudioSubscribed = false
     private var devicePacketsSent: UInt32 = 0
     private var devicePacketsDropped: UInt32 = 0
+    private var deviceNotifyError: Int32 = 0
+    private var deviceConsecutiveNotifyFailures: UInt32 = 0
+    private var deviceFreeMbufs: UInt32 = 0
     private(set) var outputDeviceName: String?
     private(set) var packetCount: UInt64 = 0
     private(set) var lostPacketCount: UInt64 = 0
@@ -384,7 +390,20 @@ final class StopWatchMicrophonePipeline {
         deviceAudioSubscribed = data[2] != 0
         devicePacketsSent = read32(data, 8)
         devicePacketsDropped = read32(data, 12)
-        return "v\(data[0]) stream=\(deviceStreaming) rate=\(read32(data, 4)) sent=\(devicePacketsSent) dropped=\(devicePacketsDropped)"
+        if data.count >= 32, data[0] >= 4 {
+            deviceNotifyError = Int32(bitPattern: read32(data, 20))
+            deviceConsecutiveNotifyFailures = read32(data, 24)
+            deviceFreeMbufs = read32(data, 28)
+        } else {
+            deviceNotifyError = 0
+            deviceConsecutiveNotifyFailures = 0
+            deviceFreeMbufs = 0
+        }
+        var description = "v\(data[0]) stream=\(deviceStreaming) rate=\(read32(data, 4)) sent=\(devicePacketsSent) dropped=\(devicePacketsDropped)"
+        if data.count >= 32, data[0] >= 4 {
+            description += " notify_error=\(deviceNotifyError) consecutive=\(deviceConsecutiveNotifyFailures) free_mbufs=\(deviceFreeMbufs)"
+        }
+        return description
     }
 
     func prepareForStreamRestart() {
@@ -415,7 +434,10 @@ final class StopWatchMicrophonePipeline {
             deviceStreaming: deviceStreaming,
             deviceAudioSubscribed: deviceAudioSubscribed,
             devicePacketsSent: devicePacketsSent,
-            devicePacketsDropped: devicePacketsDropped
+            devicePacketsDropped: devicePacketsDropped,
+            deviceNotifyError: deviceNotifyError,
+            deviceConsecutiveNotifyFailures: deviceConsecutiveNotifyFailures,
+            deviceFreeMbufs: deviceFreeMbufs
         )
     }
 
@@ -425,6 +447,7 @@ final class StopWatchMicrophonePipeline {
         lastPacketAt = nil; lastStatsAt = nil; lastDecodedRMS = 0
         deviceStreaming = false; deviceAudioSubscribed = false
         devicePacketsSent = 0; devicePacketsDropped = 0
+        deviceNotifyError = 0; deviceConsecutiveNotifyFailures = 0; deviceFreeMbufs = 0
     }
     private func read16(_ data: Data, _ offset: Int) -> UInt16 {
         UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)

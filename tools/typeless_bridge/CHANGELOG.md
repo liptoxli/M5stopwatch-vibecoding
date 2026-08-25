@@ -2,6 +2,23 @@
 
 Mac Bridge 使用独立语义化版本。固件与 Bridge 的兼容版本关系见仓库根目录 [README](../../README.md#版本历史)。
 
+## [1.3.5] - 2026-08-25
+
+### Changed
+
+- 支持固件 stats v4，日志和健康快照可直接显示最后通知错误、连续失败数和 NimBLE 可用 mbuf 数。
+- 保持现有语音异常交互：明确断流时停止 Typeless 本次听写并提示重说，不尝试拼接已经缺失的中段。
+
+### Fixed
+
+- 修正固件开始新录音时丢包计数归零所导致的 Bridge 基线计算时序问题。
+- 录音持续断流后先重建 Audio 通知订阅；60 秒内再次发生同类故障时，升级为重建整条 BLE 连接，不再需要手动关闭、重开虚拟麦克风。
+
+### Verified
+
+- Swift 构建通过，安装版本确认为 v1.3.5。
+- 实机重连后 Audio 特征已订阅，Core Audio 虚拟输出健康，stats v4 诊断字段可读。
+
 ## [1.3.4] - 2026-08-23
 
 ### Changed
@@ -245,6 +262,7 @@ Mac Bridge 使用独立语义化版本。固件与 Bridge 的兼容版本关系�
 - 支持 `M5Codex-*` 连接、Codex 额度推送、输入模式和按键配置同步。
 - 支持 Typeless 状态观察、LaunchAgent 安装和 arm64 ZIP 发布包。
 
+[1.3.5]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v1.3.5
 [1.3.4]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v1.3.4
 [1.3.3]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v1.3.3
 [1.3.2]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v1.3.2

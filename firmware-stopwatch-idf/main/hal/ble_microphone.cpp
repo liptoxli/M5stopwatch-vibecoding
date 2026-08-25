@@ -29,6 +29,12 @@ constexpr std::size_t kPacketHeaderSize = 14;
 constexpr std::size_t kPacketSize = kPacketHeaderSize + ima_adpcm::kEncodedBytesPerBlock;
 constexpr std::uint32_t kStopTailMs = 400;
 constexpr std::uint32_t kPendingVoiceTimeoutMs = 6000;
+// Keep enough NimBLE mbufs available for HID, status, and CCCD traffic.  Audio
+// is the only high-rate producer, so it must yield when the controller queue
+// backs up instead of exhausting the shared pool and getting stuck in a long
+// run of BLE_HS_ENOMEM failures.
+constexpr int kMinimumFreeMbufs = 4;
+constexpr std::uint32_t kMbufRecoveryWaitMs = 80;
 
 enum class StreamMode : std::uint8_t {
     Disabled = 0,
@@ -63,6 +69,8 @@ std::atomic<bool> g_audio_input_held = false;
 std::atomic<std::uint32_t> g_packets_sent = 0;
 std::atomic<std::uint32_t> g_packets_dropped = 0;
 std::atomic<std::uint32_t> g_pcm_bytes_sent = 0;
+std::atomic<int> g_last_notify_error = 0;
+std::atomic<std::uint32_t> g_consecutive_notify_failures = 0;
 
 std::uint16_t g_connection_handle = BLE_HS_CONN_HANDLE_NONE;
 std::uint16_t g_audio_handle = 0;
@@ -199,16 +207,19 @@ void put_u32(std::uint8_t* target, std::uint32_t value)
     target[3] = static_cast<std::uint8_t>((value >> 24) & 0xff);
 }
 
-std::array<std::uint8_t, 20> make_stats()
+std::array<std::uint8_t, 32> make_stats()
 {
-    std::array<std::uint8_t, 20> stats = {};
-    stats[0] = 3;
+    std::array<std::uint8_t, 32> stats = {};
+    stats[0] = 4;
     stats[1] = ble_microphone::is_streaming() ? 1 : 0;
     stats[2] = g_audio_subscribed.load() ? 1 : 0;
     put_u32(&stats[4], kStreamSampleRate);
     put_u32(&stats[8], g_packets_sent.load());
     put_u32(&stats[12], g_packets_dropped.load());
     put_u32(&stats[16], g_pcm_bytes_sent.load());
+    put_u32(&stats[20], static_cast<std::uint32_t>(g_last_notify_error.load()));
+    put_u32(&stats[24], g_consecutive_notify_failures.load());
+    put_u32(&stats[28], static_cast<std::uint32_t>(std::max(0, os_msys_num_free())));
     return stats;
 }
 
@@ -238,6 +249,15 @@ bool send_adpcm(const std::int16_t* samples)
         return false;
     }
 
+    const TickType_t capacity_wait_started = xTaskGetTickCount();
+    while (ble_microphone::is_streaming() && os_msys_num_free() < kMinimumFreeMbufs &&
+           xTaskGetTickCount() - capacity_wait_started < pdMS_TO_TICKS(kMbufRecoveryWaitMs)) {
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
+    if (!ble_microphone::is_streaming()) {
+        return false;
+    }
+
     ima_adpcm::Block block;
     if (!g_encoder.encode(samples, ima_adpcm::kSamplesPerBlock, block)) {
         return false;
@@ -252,25 +272,27 @@ bool send_adpcm(const std::int16_t* samples)
     packet[12] = block.step_index;
     std::memcpy(&packet[kPacketHeaderSize], block.encoded.data(), block.encoded.size());
 
-    const TickType_t retry_start = xTaskGetTickCount();
-    int result = BLE_HS_EAGAIN;
-    do {
+    int result = BLE_HS_ENOMEM;
+    if (os_msys_num_free() >= kMinimumFreeMbufs) {
         result = notify_once(g_audio_handle, packet.data(), packet.size());
-        if (result == 0) {
-            break;
-        }
-        const bool queue_full = result == BLE_HS_EAGAIN || result == BLE_HS_ENOMEM || result == BLE_HS_EBUSY;
-        if (!queue_full || xTaskGetTickCount() - retry_start >= pdMS_TO_TICKS(10)) {
-            break;
-        }
-        vTaskDelay(pdMS_TO_TICKS(1));
-    } while (ble_microphone::is_streaming());
+    }
 
     if (result == 0) {
         ++g_packets_sent;
         g_pcm_bytes_sent += ima_adpcm::kSamplesPerBlock * sizeof(std::int16_t);
+        g_last_notify_error = 0;
+        g_consecutive_notify_failures = 0;
     } else {
         ++g_packets_dropped;
+        g_last_notify_error = result;
+        const std::uint32_t consecutive = ++g_consecutive_notify_failures;
+        if (consecutive == 1 || consecutive == 8 || consecutive % 50 == 0) {
+            ESP_LOGW(kTag,
+                     "audio notify blocked: rc=%d consecutive=%lu free_mbufs=%d",
+                     result,
+                     static_cast<unsigned long>(consecutive),
+                     os_msys_num_free());
+        }
     }
     g_sample_index += ima_adpcm::kSamplesPerBlock;
     return result == 0;
@@ -323,6 +345,8 @@ void capture_task(void*)
             g_packets_sent = 0;
             g_packets_dropped = 0;
             g_pcm_bytes_sent = 0;
+            g_last_notify_error = 0;
+            g_consecutive_notify_failures = 0;
         }
         GetHAL().audioRecord(source, 20, 30.0f);
         if (source.empty()) {

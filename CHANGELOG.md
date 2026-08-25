@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [0.10.6] - 2026-08-25
+
+### Changed
+
+- 音频通知在 NimBLE 可用 mbuf 不足时短暂让出，并始终为 HID、状态和 CCCD 交互保留缓冲。
+- 麦克风统计升级为 v4，增加最后通知错误、连续失败数和当前可用 mbuf 数。
+
+### Fixed
+
+- 修复长时间或连续语音输入时，高频 BLE 音频包可能耗尽 NimBLE 共享队列，导致按键仍可用但虚拟麦克风持续无声的问题。
+- 每次新录音重置诊断计数，并限制重复错误日志频率，避免故障期间增加额外负载。
+
+### Verified
+
+- ESP-IDF v5.5.4 全量构建通过，应用分区刷写与 Flash 哈希校验成功，设备启动版本确认为 v0.10.6。
+- Bridge v1.3.5 完成本机构建、安装和启动；设备回传 stats v4，空闲状态为 `notify_error=0` 且 `free_mbufs=36`。
+
 ## [0.10.5] - 2026-08-23
 
 ### Changed
@@ -303,7 +320,8 @@
 - 新增 Typeless/微信输入法输入模式、A/B 键绑定、摇晃清除和 BLE HID 输入。
 - 新增 Codex 额度 BLE 推送、隐私与安全说明、功能说明和 Pet 替换文档。
 
-[Unreleased]: https://github.com/liptoxli/M5stopwatch-vibecoding/compare/v0.10.5...HEAD
+[Unreleased]: https://github.com/liptoxli/M5stopwatch-vibecoding/compare/v0.10.6...HEAD
+[0.10.6]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.10.6
 [0.10.5]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.10.5
 [0.10.4]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.10.4
 [0.10.2]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.10.2

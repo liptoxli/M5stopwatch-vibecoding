@@ -1,6 +1,6 @@
 # StopWatch BLE microphone protocol
 
-Status: introduced in firmware v0.7.0 and validated with the current firmware v0.9.2 / StopWatch BLE Bridge v1.2.0.
+Status: introduced in firmware v0.7.0 and updated for firmware v0.10.6 / StopWatch BLE Bridge v1.3.5.
 
 The microphone is an additive service on the same bonded BLE connection used
 by HID and the existing Bridge service. It does not replace the full StopWatch
@@ -45,6 +45,28 @@ resamples to 320 samples before encoding. Packet and sample gaps are detected
 by the Mac Bridge and replaced with silence so the virtual device clock stays
 continuous.
 
+## Stats packet v4
+
+All integer fields are little-endian. Older Bridge versions can continue to
+read the first 20 bytes; v1.3.5 and later also expose transport diagnostics.
+
+| Offset | Size | Field |
+| ---: | ---: | --- |
+| 0 | 1 | Stats version (`4`) |
+| 1 | 1 | Streaming flag |
+| 2 | 1 | Audio notification subscribed flag |
+| 4 | 4 | Sample rate (`uint32`) |
+| 8 | 4 | Packets sent (`uint32`) |
+| 12 | 4 | Packets dropped (`uint32`) |
+| 16 | 4 | PCM bytes represented (`uint32`) |
+| 20 | 4 | Last NimBLE notification error (`int32`) |
+| 24 | 4 | Consecutive notification failures (`uint32`) |
+| 28 | 4 | Current free NimBLE mbufs (`uint32`) |
+
+Firmware keeps at least four shared mbufs available before it enqueues another
+high-rate audio notification. This prevents audio from starving HID, status,
+and subscription traffic when the controller queue is temporarily congested.
+
 ## Runtime behavior
 
 Virtual microphone mode defaults to off. When enabled, the Mac keeps the local
@@ -54,3 +76,9 @@ input sends `Stop` after a short tail. Disabling the menu also unsubscribes,
 stops Core Audio, and restores the previous macOS default input. The active
 audio path is a real-time stream; no WAV file is created and no recording is
 uploaded asynchronously.
+
+When the Bridge detects a sustained stall, it stops the current Typeless
+dictation and asks the user to repeat the sentence. It then cycles the Audio
+notification subscription; a second transport fault within 60 seconds rebuilds
+the full BLE connection. Interrupted speech is never silently joined to a
+later stream.
