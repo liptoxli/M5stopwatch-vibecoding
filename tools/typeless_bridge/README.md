@@ -2,7 +2,7 @@
 
 StopWatch BLE Bridge is the macOS companion app for the M5 StopWatch Codex firmware.
 
-Current version: **v1.3.6**. Full version history: [CHANGELOG.md](CHANGELOG.md).
+Current version: **v1.4.0**. Full version history: [CHANGELOG.md](CHANGELOG.md).
 
 It provides local functions including:
 
@@ -10,7 +10,8 @@ It provides local functions including:
 - Sync configurable key bindings and input mode to firmware.
 - Optionally observe Typeless recording/processing state and sync it back to the device.
 - Optionally read local Codex auth and push weekly quota snapshots to the device.
-- Persist a daily weekly-quota baseline using an 08:00 local-time boundary.
+- Track daily weekly-quota consumption using a fixed 08:00 Asia/Shanghai boundary.
+- Optionally share remaining quota, Today and four-hour activity through a user-configured sync API across Macs.
 - Sync the local Codex unread-task count and recent four-hour activity summary.
 - Stream the StopWatch microphone as 16 kHz IMA-ADPCM and feed a macOS virtual input named `M5 StopWatch Mic`.
 
@@ -181,12 +182,34 @@ https://chatgpt.com/backend-api/wham/usage
 
 If the user is not logged in locally, quota push fails but the BLE keyboard and Typeless controls still work.
 
-Codex currently exposes only a weekly quota window. The bridge ignores retired
-5-hour windows and sends only `codex.weekly`.
+This project displays the weekly quota window only. The Bridge ignores other
+windows and sends `codex.weekly`.
 
-### Daily 08:00 tracking
+### Shared quota and activity (v1.4.0)
 
-The first successful weekly quota sample in each local-time period from 08:00
+With private `cloud-sync.json` configured, all Macs use one account-scoped cloud
+history through a user-configured HTTPS endpoint. The Bridge collects quota even
+while the watch is disconnected, keeps a retryable outbox, and merges recording
+and interaction events with stable IDs. Audio, dictation text and OpenAI access
+tokens never enter the sync service. No server address or credential is bundled.
+
+Cloud exchange is every 60 seconds; official quota collection uses the existing
+interval (300 seconds by default). BLE panel refresh keeps the original interval
+and is deferred during dictation. No firmware, HAL, pairing or input change is required.
+
+See [the shared-usage guide](../../docs/stopwatch-cloud-sync.md) for configuration,
+API fields, migration, privacy and rollback. Run
+`python3 tools/typeless_bridge/cloud_sync_status.py` for a read-only status check.
+
+The first migration may display **Today estimate**: older local baselines were
+not necessarily sampled at 08:00. Missing history displays **Today incomplete**
+and `--%`, not a fabricated zero. Network failure retains stale cached statistics.
+Unobserved consumption around a day boundary cannot be recovered exactly from
+one later reading. Sleep/resume and full-day physical validation remain ongoing.
+
+### Local-only daily 08:00 tracking (without cloud configuration)
+
+The first successful weekly quota sample in each Asia/Shanghai period from 08:00
 through the next day at 07:59 establishes the daily baseline. State is persisted
 at:
 

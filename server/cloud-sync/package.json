@@ -1,0 +1,11 @@
+{
+  "name": "stopwatch-cloud-sync",
+  "version": "1.4.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.22.0" },
+  "scripts": {
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "start": "node --env-file=.env --experimental-strip-types server.ts"
+  }
+}

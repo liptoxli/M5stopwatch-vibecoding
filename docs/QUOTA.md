@@ -42,7 +42,7 @@ https://chatgpt.com/backend-api/wham/usage
 
 Bridge 不保存 access token，只使用本机已有登录文件即时请求。请求结果被归一化为设备 payload，再通过 BLE GATT 写入设备的 panel characteristic。
 
-当前正式 contract 只接受 604800 秒的 weekly window，不再显示或回退到 5 小时窗口。Bridge 同时维护本地 08:00 到次日 07:59 的每日统计：
+当前设备 contract 只接受 604800 秒的 weekly window，不显示或回退到其他窗口。Bridge v1.4.0 的日界线固定为北京时间 08:00 到次日 07:59，不再跟随电脑时区。未配置云同步时，Bridge 在本机维护以下统计：
 
 - `day_start_left_pct`：本周期第一次成功采样时的周剩余额度。
 - `segment_start_left_pct`：当前周额度段的起点。
@@ -51,6 +51,14 @@ Bridge 不保存 access token，只使用本机已有登录文件即时请求。
 - `reset_count`：本周期检测到的周额度重置次数。
 
 如果周额度在日统计周期内重置，剩余额度向上跳变不会被当作负消耗；Bridge 会开始新的统计段并累计 `reset_count`。如果 Bridge 在 08:00 没运行，无法回溯边界到首次成功采样之间的精确消耗。
+
+### 可选跨 Mac 同步
+
+配置 `cloud-sync.json` 后，服务端合并同一账号的额度观察值与设备活动，不把各 Mac 的 Today 相加。最新官方剩余量、固定日界线的累计消耗、四小时热力图由同一份历史生成，再交给原 BLE 面板通道。
+
+Today 是“周额度百分点的当天消耗”，不是官方每日独立额度。云模式对缺失 08:00 基线、旧记录导入和异常上涨分别标注不完整或估算。其他终端的消耗只有在计入同一官方额度池时才会反映到剩余量；不能据此恢复所有终端的操作时间。
+
+服务地址和权限自行配置，无维护者预设服务器。详见 [跨设备同步与 API](stopwatch-cloud-sync.md)。
 
 设备侧接收路径：
 

@@ -14,7 +14,7 @@
 | 组件 | 版本 | 已验证能力 |
 | --- | --- | --- |
 | StopWatch 固件 | v0.10.6 | 两套 UI、A/B 键、摇晃、实时 BLE 麦克风、额度、四小时热力图、四 Agent、推理滑动、中心四向 Radial、持久化配对保护、Vendor HID 在线自校验、开机录音意图锁存与 BLE 音频背压 |
-| macOS Bridge | v1.3.6 | 保留 BLE Companion、Typeless、额度、活动、HID 恢复与断流重连；新增固定虚拟输出和路由异常静音，自动测试边界见下文 |
+| macOS Bridge | v1.4.0 | 可选跨 Mac 额度与活动同步；保留 BLE Companion、Typeless、HID 恢复、固定虚拟输出和路由异常静音 |
 | 虚拟麦克风 | `M5 StopWatch Mic` | Bridge 解码 16 kHz 单声道 PCM，经采样率转换写入虚拟设备；当前回环验收设置为 48 kHz 双声道 |
 
 以下既有能力已经完成真实设备验收，可以作为回归基线；不代表 v1.3.6 的双机 Typeless 实测已全部完成：
@@ -79,6 +79,8 @@ Mac 本机 Codex 状态
 | --- | --- | --- |
 | Bridge 主程序 | `tools/typeless_bridge/stopwatch_ble_bridge.swift` | 菜单栏、CoreBluetooth、Codex 状态、Typeless、音频管线和重连 |
 | 音频管线 | `tools/typeless_bridge/stopwatch_microphone.swift` | ADPCM 解码、PCM 缓冲、AUConverter、固定设备 AUHAL、路由静音和健康快照 |
+| 云统计客户端 | `tools/typeless_bridge/stopwatch_cloud_sync.swift` | 账号范围校验、HTTPS 同步、离线队列、缓存和首日迁移 |
+| 云统计服务 | `server/cloud-sync/` | SQLite 去重、统一日界线、四小时活动合并及受限 API |
 | 音频路由测试 | `tools/typeless_bridge/tests/` | 静音门控、物理输出拒绝、生命周期、虚拟回环和进程实际输出审计 |
 | Bridge 构建 | `tools/typeless_bridge/build_stopwatch_ble_bridge.sh` | 构建可执行程序；安装或打包脚本生成 `.app` |
 | 本机安装 | `tools/typeless_bridge/install_launch_agent.sh` | 安装 App 与 LaunchAgent |
@@ -198,11 +200,17 @@ Mac mini 的 16→48 kHz 回环和故障静音已通过；iMac 的路由保护�
 ### 4.6 活动热力图与额度
 
 - 周额度只显示 weekly window，不恢复已经移除的 5h window。
-- 当天用量以本地 08:00 为日边界。
+- Bridge v1.4.0 起，当天用量以北京时间 08:00 为日边界，不随电脑时区变化。
 - 活动窗口为最近四小时，共 24 格，每格 10 分钟。
 - v0.9.2 起时间顺序为每列上、下交替，再进入下一列。
 - Bridge 以 70% 实际录音时长和 30% 启动频率计算强度。
 - 顶部渐变表达额度健康度；中央大数字只显示剩余量，左侧显示当天已用量。
+
+可选云同步的完整字段和操作见 [跨设备同步说明](stopwatch-cloud-sync.md)。配置不存在时保持本地模式；开启后服务端是统一统计来源，不能把每台电脑的 Today 简单相加。设备 ID 必须各不相同，账号范围必须一致。保留 `stale`、`quality` 与缺失基线语义；不得把过期或未知值显示为新鲜的 0。
+
+新增参数：云同步 60 秒、官方采集默认 300 秒、24×600 秒活动桶、8 天服务端保留期、7 天额度待传队列。改变日界线时同时修改 Swift 本地日跟踪、云缓存跨日处理与服务端算法，补齐跨日测试；不要只改文档中的时区。
+
+改统计时运行 `npm --prefix server/cloud-sync test`、`bash tools/typeless_bridge/tests/run_cloud_sync_tests.sh` 和原音频路由回归。独立 HTTP 示例默认只监听回环地址，外部接入需 HTTPS；不需要也不应复制维护者的服务器配置。
 
 ## 5. Codex Micro 兼容层
 
@@ -260,6 +268,7 @@ UI 支持 solid、breath、shallow breath 等宿主效果。Agent 点的触摸�
 | Mac 虚拟音频路由/静音 | `stopwatch_microphone.swift` + Bridge 录音预检 | BLE 格式、系统默认扬声器、配对与 HID |
 | Bridge 菜单与状态同步 | `stopwatch_ble_bridge.swift` | 固件 NVS 配置格式，除非同时迁移 |
 | 额度/活动算法 | Bridge panel builder + `codex_quota_client.cpp` | UI 里重复计算第二份真相 |
+| 跨电脑统计/API | `stopwatch_cloud_sync.swift` + `server/cloud-sync/lib/` | 用户服务器、原始账号凭据、音频和 HID 链路 |
 
 ## 7. Agent 开发工作流
 
@@ -388,6 +397,7 @@ idf.py build
 - 本机绝对路径。
 - Codex access token、account ID 或 `auth.json` 内容。
 - Apple Developer 签名身份和证书。
+- 云同步真实 endpoint、account_scope、device_id、token、数据库、个人部署手册或安装备份。
 - 未经许可的第三方二进制或素材。
 
 公开 `codex_config.h` 必须保留 `example.com` 和 `YOUR_WIFI_*` 占位符。Bridge 可以读取当前用户本机的 `~/.codex/auth.json`，但不得记录、复制或打包其中的凭据。

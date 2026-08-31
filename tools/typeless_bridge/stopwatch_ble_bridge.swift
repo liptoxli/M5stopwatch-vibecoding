@@ -706,6 +706,19 @@ private final class OpenWatcherHomeActivityTracker {
         return result.map { round($0 * 100) / 100 }
     }
 
+    func cloudEvents() -> [CloudActivityEvent] {
+        let now = Date()
+        lock.lock()
+        defer { lock.unlock() }
+        pruneLocked(now: now)
+        var events = intervals.map { CloudActivityEvent.make(kind: "recording", start: $0.start, end: $0.end) }
+        if let start = recordingStartedAt, now > start {
+            events.append(.make(kind: "recording", start: start, end: now))
+        }
+        events += interactions.map { .make(kind: "interaction", start: $0.date, end: $0.date, units: $0.units) }
+        return events.sorted { $0.start < $1.start }
+    }
+
     private func pruneLocked(now: Date) {
         let cutoff = now.addingTimeInterval(-Self.activityWindowSeconds)
         intervals.removeAll { $0.end < cutoff }
@@ -1286,8 +1299,8 @@ private func codexAuth() throws -> (accessToken: String, accountId: String) {
     return (accessToken, tokens["account_id"] as? String ?? "")
 }
 
-private func fetchCodexUsage() throws -> [String: Any] {
-    let auth = try codexAuth()
+private func fetchCodexUsage(auth suppliedAuth: (accessToken: String, accountId: String)? = nil) throws -> [String: Any] {
+    let auth = try suppliedAuth ?? codexAuth()
     var request = URLRequest(url: URL(string: "https://chatgpt.com/backend-api/wham/usage")!)
     request.httpMethod = "GET"
     request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -1396,7 +1409,7 @@ private final class DailyWeeklyQuotaTracker {
 
     private func trackingPeriodStart(for now: Date) -> Date {
         var calendar = Calendar.current
-        calendar.timeZone = .current
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
         let startOfDay = calendar.startOfDay(for: now)
         let todayBoundary = calendar.date(byAdding: .hour, value: 8, to: startOfDay) ?? startOfDay
         if now >= todayBoundary {
@@ -1409,7 +1422,7 @@ private final class DailyWeeklyQuotaTracker {
         let formatter = DateFormatter()
         formatter.calendar = Calendar.current
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")!
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: periodStart)
     }
@@ -1434,8 +1447,7 @@ private final class DailyWeeklyQuotaTracker {
     }
 }
 
-private func buildDevicePanel() throws -> Data {
-    let raw = try fetchCodexUsage()
+private func weeklyWindow(_ raw: [String: Any]) throws -> [String: Any] {
     let rateLimit = raw["rate_limit"] as? [String: Any] ?? raw
     var windows: [Int: [String: Any]] = [:]
     for item in flattenDictionaries(rateLimit) {
@@ -1449,15 +1461,62 @@ private func buildDevicePanel() throws -> Data {
         }
     }
 
-    let weekly = windows[604800] ?? [:]
-    let weeklyLeft = leftPercent(from: weekly)
-    let valid = weeklyLeft != nil
+    guard let weekly = windows[604800], leftPercent(from: weekly) != nil else {
+        throw CloudSyncError.noSnapshot // Missing is not a 0% quota observation.
+    }
+    return weekly
+}
+
+private func buildDevicePanel() throws -> Data {
+    let weeklyRemaining: Int
+    let weeklyReset: String
+    let weeklyResetAt: Any
+    let dailyPayload: [String: Any]
+    let activityBuckets: [Double]
+    let stale: Bool
+    let quotaUpdatedAt: String
+    let source: String
+    let message: String
+    if CloudUsageSynchronizer.shared.configured {
+        let auth = try codexAuth()
+        let snapshot = try CloudUsageSynchronizer.shared.refresh(
+            accountID: auth.accountId,
+            activity: OpenWatcherHomeActivityTracker.shared.cloudEvents(),
+            quotaInterval: TimeInterval(SettingsStore.shared.settings.quotaRefreshSeconds)
+        ) {
+            let weekly = try weeklyWindow(fetchCodexUsage(auth: auth))
+            let reset = (weekly["reset_at"] as? NSNumber)?.doubleValue ??
+                (weekly["reset_at"] as? String).flatMap(Double.init)
+            return CloudQuotaObservation(at: Date().timeIntervalSince1970,
+                                         left: Double(leftPercent(from: weekly)!), reset_at: reset)
+        }
+        guard snapshot.weekly.valid, let left = snapshot.weekly.left_pct else { throw CloudSyncError.noSnapshot }
+        weeklyRemaining = Int(left.rounded())
+        weeklyResetAt = snapshot.weekly.reset_at as Any? ?? NSNull()
+        weeklyReset = snapshot.weekly.reset_at.map { compactDuration(Int(max(0, $0 - Date().timeIntervalSince1970))) } ?? "--"
+        dailyPayload = snapshot.daily_tracking.payload
+        activityBuckets = snapshot.activity_buckets
+        stale = snapshot.stale
+        quotaUpdatedAt = ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: snapshot.weekly.observed_at ?? snapshot.as_of))
+        source = "cloud_shared"
+        message = stale ? "Quota cached" : (snapshot.daily_tracking.quality == "sampled" ? "Quota synced" :
+            (snapshot.daily_tracking.quality == "imported" ? "Today estimate" : "Today incomplete"))
+        if let error = CloudUsageSynchronizer.shared.lastError { log(error) }
+    } else {
+        let weekly = try weeklyWindow(fetchCodexUsage())
+        weeklyRemaining = leftPercent(from: weekly)!
+        weeklyReset = resetText(from: weekly)
+        weeklyResetAt = weekly["reset_at"] ?? NSNull()
+        dailyPayload = DailyWeeklyQuotaTracker.shared.update(weeklyLeftPct: weeklyRemaining).payload
+        activityBuckets = OpenWatcherHomeActivityTracker.shared.buckets()
+        stale = false
+        quotaUpdatedAt = ISO8601DateFormatter().string(from: Date())
+        source = "mac_bridge"
+        message = "Quota synced"
+    }
 
     let now = ISO8601DateFormatter().string(from: Date())
     let epoch = Int(Date().timeIntervalSince1970)
-    let weeklyRemaining = weeklyLeft ?? 0
-    let weeklyReset = resetText(from: weekly)
-    let dailyTracking = DailyWeeklyQuotaTracker.shared.update(weeklyLeftPct: weeklyRemaining)
     let pressure = max(0, min(100, 100 - weeklyRemaining))
     let activeState = BridgeStatusCenter.shared.typelessStatus
     let sessionActive = activeState.lowercased().contains("record") ||
@@ -1477,16 +1536,16 @@ private func buildDevicePanel() throws -> Data {
         "activity_label": sessionActive ? "live" : "4h",
         "activity_live": sessionActive,
         "activity_window": "4h",
-        "activity_buckets": OpenWatcherHomeActivityTracker.shared.buckets()
+        "activity_buckets": activityBuckets
     ]
     let codex: [String: Any] = [
-        "valid": valid,
-        "status": valid ? "ok" : "invalid",
-        "source": "mac_bridge",
-        "updated_at": now,
-        "stale": false,
+        "valid": true,
+        "status": stale ? "stale" : "ok",
+        "source": source,
+        "updated_at": quotaUpdatedAt,
+        "stale": stale,
         "processing": false,
-        "message": valid ? "Quota synced" : "Quota invalid",
+        "message": message,
         "host": [
             "name": Host.current().localizedName ?? "Mac",
             "app": "StopWatch BLE Bridge",
@@ -1500,11 +1559,11 @@ private func buildDevicePanel() throws -> Data {
         ],
         "openwatcher_home": openWatcherHome,
         "weekly": [
-            "left_pct": weeklyLeft ?? 0,
-            "used_pct": 100 - (weeklyLeft ?? 0),
+            "left_pct": weeklyRemaining,
+            "used_pct": 100 - weeklyRemaining,
             "reset_in": weeklyReset,
-            "reset_at": weekly["reset_at"] ?? "",
-            "daily_tracking": dailyTracking.payload
+            "reset_at": weeklyResetAt,
+            "daily_tracking": dailyPayload
         ]
     ]
     log("quota weekly left=\(weeklyRemaining)% reset=\(weeklyReset) window=604800s")
@@ -2103,6 +2162,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     private var lastNativeHIDWaitLogAt = Date.distantPast
     private var panelSequence = 1
     private var quotaFetchInFlight = false
+    private var lastQuotaPanelSentAt = Date.distantPast
     private var bridgeDiscoveryInFlight = false
     private var lastTimePanelPushAt = Date.distantPast
     private var typelessSessionActive = false
@@ -2151,6 +2211,8 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         ensureAccessibilityPrompt(reason: "startup")
         startMicrophoneShortcutMonitor()
         central = CBCentralManager(delegate: self, queue: .main)
+        // Collect even when the watch moves to another Mac.
+        startQuotaLoop()
     }
 
     deinit {
@@ -2204,8 +2266,8 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         }
         if panelCharacteristic != nil {
             pushTimePanel(reason: "settings")
-            startQuotaLoop()
         }
+        startQuotaLoop()
         BridgeStatusCenter.shared.refreshMenu()
     }
 
@@ -2304,8 +2366,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         log("Disconnected: \(error?.localizedDescription ?? "normal")")
         pollTimer?.invalidate()
         pollTimer = nil
-        quotaTimer?.invalidate()
-        quotaTimer = nil
+        // Keep account collection/cloud sync alive without a BLE connection.
         resetBridgeCharacteristics()
         if SettingsStore.shared.settings.virtualMicrophoneEnabled {
             // Tear down the Core Audio route as well as BLE state.  Keeping the
@@ -3555,9 +3616,10 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             BridgeStatusCenter.shared.quotaStatus = "Disabled"
             return
         }
-        pushQuotaPanel(reason: "quota")
+        pushQuotaPanel(reason: "connect")
         quotaTimer?.invalidate()
-        quotaTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(SettingsStore.shared.settings.quotaRefreshSeconds), repeats: true) { [weak self] _ in
+        let interval = CloudUsageSynchronizer.shared.configured ? 60.0 : TimeInterval(SettingsStore.shared.settings.quotaRefreshSeconds)
+        quotaTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             self?.pushQuotaPanel(reason: "quota")
         }
     }
@@ -3585,7 +3647,8 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     }
 
     private func pushQuotaPanel(reason: String = "quota") {
-        guard panelCharacteristic != nil else {
+        guard SettingsStore.shared.settings.enableCodexQuota,
+              panelCharacteristic != nil || CloudUsageSynchronizer.shared.configured else {
             return
         }
         guard !quotaFetchInFlight else {
@@ -3601,6 +3664,15 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.quotaFetchInFlight = false
+                    // Cloud refreshes every minute; BLE display cadence remains
+                    // unchanged. Never add a panel burst during dictation.
+                    guard self.panelCharacteristic != nil,
+                          self.lastState?.phase != "recording", !self.typelessSessionActive,
+                          reason != "quota" || Date().timeIntervalSince(self.lastQuotaPanelSentAt) >= TimeInterval(SettingsStore.shared.settings.quotaRefreshSeconds) else {
+                        BridgeStatusCenter.shared.quotaStatus = "Cloud synced"
+                        return
+                    }
+                    self.lastQuotaPanelSentAt = Date()
                     self.sendPanelData(panel,
                                        kind: "quota",
                                        finalStatus: "Synced \(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium))",
