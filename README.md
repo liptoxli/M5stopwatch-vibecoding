@@ -6,7 +6,7 @@
 
 <p align="center">
   <img alt="Firmware v0.10.6" src="https://img.shields.io/badge/firmware-v0.10.6-6f5cff">
-  <img alt="Bridge v1.3.5" src="https://img.shields.io/badge/macOS%20Bridge-v1.3.5-35b8ff">
+  <img alt="Bridge v1.3.6" src="https://img.shields.io/badge/macOS%20Bridge-v1.3.6-35b8ff">
   <img alt="ESP32-S3" src="https://img.shields.io/badge/hardware-ESP32--S3-ef6c35">
   <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-55f36a">
 </p>
@@ -21,7 +21,11 @@ M5 StopWatch for Vibe Coding 为 Codex、ChatGPT、Claude Code 和 IDE 工作流
 
 ## 项目现状
 
-当前版本为 **固件 v0.10.6 / macOS Bridge v1.3.5**。语音输入、虚拟麦克风、BLE HID、原生 Codex Micro 兼容交互和圆屏触摸均已在真实设备上完成端到端验证。本次稳定性更新解决长时间语音中偶发的“按键仍正常，但麦克风突然没有音频”：固件会为 HID 和控制信息保留蓝牙缓冲，避免高频音频包耗尽共享队列；Bridge 发现持续断流后会先重建音频订阅，60 秒内再次发生则重建整条 BLE 连接。
+当前版本为 **固件 v0.10.6 / macOS Bridge v1.3.6**。语音输入、虚拟麦克风、BLE HID、原生 Codex Micro 兼容交互和圆屏触摸已有实机使用基础。本次更新集中修复一个声音去向的问题：按 A 录音时，自己的声音不应从 Mac 音响播放，而应只送到 `M5 StopWatch Mic`，供 Typeless 等应用读取。
+
+Bridge v1.3.6 固定使用虚拟麦克风输出；一旦输出设备异常，就静音并结束本次听写，提示重新录制，不会改走扬声器。**这次只需更新 Mac Bridge，无需重刷固件或重新配对。** 之前的 BLE 音频缓冲保护、断流后逐级重连和 A/B 交互继续保留。
+
+新输出路径已通过 Mac mini 的虚拟音频回环与故障静音测试，iMac 的输出路由保护检查也已通过；本版双机的实际 Typeless 录入仍待完整验收。虚拟设备请保留 **48 kHz** 设置（蓝牙源音频仍是 16 kHz）；手动切换采样率的已知限制见 [Bridge 更新记录](tools/typeless_bridge/CHANGELOG.md#136---2026-08-31)。
 
 | 能力 | 当前状态 |
 | --- | --- |
@@ -162,6 +166,7 @@ Bridge 支持 Typeless 和微信输入法两种输入路径，也可以配合任
 
 | 日期 | 固件 | Mac Bridge | 主要更新 |
 | --- | --- | --- | --- |
+| 2026-08-31 | v0.10.6（不变） | v1.3.6 | 修复麦克风声音误从 Mac 音响播放；固定虚拟输出、录音前核验路由、异常静音并提示重录；补充回归测试与已知限制 |
 | 2026-08-25 | v0.10.6 | v1.3.5 | 为高频音频包增加 BLE 缓冲背压；增加可读断流诊断，Bridge 可逐级重建音频订阅和 BLE 连接 |
 | 2026-08-23 | v0.10.5 | v1.3.4 | 开机后首次 A 键可等待音频通道就绪并自动开流；Bridge 更快接入 Companion 与虚拟麦克风 |
 | 2026-08-22 | v0.10.4 | v1.3.3 | 修复 Agent 在线误判；A 键可自动拉起 Typeless，并在录音前恢复虚拟麦克风输出与 BLE 音频订阅 |

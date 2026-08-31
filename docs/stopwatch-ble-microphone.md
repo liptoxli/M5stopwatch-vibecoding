@@ -1,6 +1,6 @@
 # StopWatch BLE microphone protocol
 
-Status: introduced in firmware v0.7.0 and updated for firmware v0.10.6 / StopWatch BLE Bridge v1.3.5.
+Status: introduced in firmware v0.7.0 and updated for firmware v0.10.6 / StopWatch BLE Bridge v1.3.6. The v1.3.6 change is Mac-side output routing only; the BLE packet format is unchanged.
 
 The microphone is an additive service on the same bonded BLE connection used
 by HID and the existing Bridge service. It does not replace the full StopWatch
@@ -82,3 +82,21 @@ dictation and asks the user to repeat the sentence. It then cycles the Audio
 notification subscription; a second transport fault within 60 seconds rebuilds
 the full BLE connection. Interrupted speech is never silently joined to a
 later stream.
+
+## Mac virtual output routing (Bridge v1.3.6)
+
+Decoded 16 kHz mono PCM passes through an Apple AUConverter and an explicit
+AUHAL output bound to `M5StopWatchMic_2_UID`. The visible input consumed by
+Typeless is `M5StopWatchMic_UID`. The existing BlackHole fallback accepts only
+`BlackHole2ch_UID` with virtual transport; physical outputs and name-only matches
+are rejected. The Bridge does not use the system speaker as a fallback.
+
+Output starts muted until its device is verified. The final callback checks the
+actual device before and after conversion, so a route fault also suppresses
+converter-buffered audio. Recording preflight, queued start commands and health
+checks verify the output again. An active dictation with a route fault ends and
+requires a new recording; rebuilding the output must not resume that utterance.
+
+Use the virtual device's existing 48 kHz format; the BLE source stays 16 kHz.
+Live switching to 16 kHz has a known silent-input case. Hardware tests and
+validation limits are documented in the [Bridge README](../tools/typeless_bridge/README.md#output-routing-safety-v136).

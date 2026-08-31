@@ -2,6 +2,8 @@
 
 本项目采用[语义化版本](https://semver.org/lang/zh-CN/)；所有版本更新都在这里记录，并使用同版本 Git 标签发布。
 
+此文件记录固件历史。Mac Bridge 独立更新：最新 **v1.3.6（2026-08-31）** 修复虚拟麦克风音频误送扬声器，固件仍为 v0.10.6；详见 [Bridge Changelog](tools/typeless_bridge/CHANGELOG.md)。
+
 ## [Unreleased]
 
 ## [0.10.6] - 2026-08-25

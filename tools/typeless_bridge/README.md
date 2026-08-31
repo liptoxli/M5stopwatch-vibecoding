@@ -2,7 +2,7 @@
 
 StopWatch BLE Bridge is the macOS companion app for the M5 StopWatch Codex firmware.
 
-Current version: **v1.3.5**. Full version history: [CHANGELOG.md](CHANGELOG.md).
+Current version: **v1.3.6**. Full version history: [CHANGELOG.md](CHANGELOG.md).
 
 It provides local functions including:
 
@@ -12,17 +12,9 @@ It provides local functions including:
 - Optionally read local Codex auth and push weekly quota snapshots to the device.
 - Persist a daily weekly-quota baseline using an 08:00 local-time boundary.
 - Sync the local Codex unread-task count and recent four-hour activity summary.
-- Recover the unified Codex Micro HID Report subscription after BLE reconnects.
-- Sync the confirmed Codex reasoning label and provide a bounded fallback when the native Vendor HID path is unavailable.
 - Stream the StopWatch microphone as 16 kHz IMA-ADPCM and feed a macOS virtual input named `M5 StopWatch Mic`.
 
 Real keyboard input is sent by the device firmware through BLE HID. The bridge app does not inject Typeless, WeChat IME, Enter, or Clear Input keystrokes into macOS. No account credentials are bundled in the app. Codex quota sync is optional and reads the current user's local `~/.codex/auth.json` only when enabled.
-
-## Codex Micro compatibility
-
-Firmware v0.10.2 exposes one unified BLE HID service containing standard keyboard, Consumer Control and Vendor-defined Codex Reports. The Bridge does not replace that native path. It waits for macOS to own and settle the native HID connection before attaching Companion/audio services, helps rediscover notifying HID Report characteristics after reconnects, pushes the confirmed reasoning label back to the display and provides a serialized command-palette fallback only when the native reasoning Report is not available.
-
-Agent slot taps (`AG00` to `AG03`) and center Radial events are sent directly by firmware. They do not require Accessibility-based key injection. On the first upgrade from the older HID layout, remove the old `M5Codex-*` pairing in macOS and pair it again once.
 
 ## User Setup
 
@@ -63,11 +55,59 @@ Virtual microphone mode is off by default. When enabled, the Bridge:
 
 Bridge v1.1.2 also monitors BLE packet arrival, ADPCM decoding and the Core Audio render callback independently. If macOS stops the virtual output engine while the BLE stream remains connected, the Bridge rebuilds only that output engine and keeps the device connection and original-input restore state intact.
 
+### Output routing safety (v1.3.6)
+
+Audio is sent through an explicit Core Audio HAL output unit pinned to
+`M5StopWatchMic_2_UID`, not a default-output audio engine. The visible input is
+`M5StopWatchMic_UID`; the existing BlackHole fallback is limited to the virtual
+`BlackHole2ch_UID` device. Physical speakers and arbitrary renamed devices are
+rejected before an output unit starts.
+
+The output starts muted and verifies the device after initialization and start.
+The final render callback verifies the actual device before and after conversion;
+an unexpected device or failed query produces silence. Device loss, route changes,
+and sample-rate changes latch the mute until the output is rebuilt. The standard
+Apple AUConverter handles 16 kHz mono to the virtual device's current rate without
+changing the system speaker selection or device sample rate.
+
+Recording preflight and health checks include route identity. If the route fails
+during a Typeless recording, that dictation is interrupted and the user is asked
+to retry; recovery clears buffered audio and never automatically resumes the
+interrupted dictation. Logs report the expected UID and actual device ID.
+
+Regression tests (hardware tests require the installed M5 driver):
+
+```bash
+bash tools/typeless_bridge/tests/run_audio_route_tests.sh
+bash tools/typeless_bridge/tests/run_audio_route_tests.sh --hardware --loopback
+# Read-only audit of an installed Bridge process after its mic is enabled:
+bash tools/typeless_bridge/tests/run_audio_route_tests.sh --audit-pid <bridge-pid>
+```
+
+The loopback test sends only a synthetic signal to the M5 virtual output and
+measures its virtual input RMS. It neither records a physical microphone nor
+writes an audio file; physical output devices are not permitted.
+macOS may still require microphone permission for the **test program** to read
+that virtual input. An SSH session can receive silence when this access is
+unavailable; use a logged-in desktop session and explicitly approve the test
+only if desired. Do not treat an authorization-blocked loopback as proof of a
+broken output route, and do not modify the TCC database to run this test.
+The PID audit exits 2 when there is no active output yet (for example, waiting
+for the StopWatch to connect), and 1 for a non-allowed output; these are distinct.
+
+Validation boundary (2026-08-31): the Mac mini passed 16 kHz source → 48 kHz
+virtual output → virtual input loopback, repeated output reconstruction, and
+fault-induced silence. Keep the virtual device at its existing **48 kHz** setting.
+The optional diagnostic `--hardware --rates` temporarily changes only the virtual
+device rate and restores it on completion/error. It currently reproduces silence
+after a live switch to 16 kHz on the tested system, despite a valid output route;
+this is **not a passing regression test**. Cross-rate live switching remains an
+open compatibility issue; the app does not force device-rate changes. The BLE
+microphone stream itself remains 16 kHz and needs no change.
+
 Each BLE packet carries 320 decoded samples (20 ms): 14 bytes of protocol header plus 160 bytes of ADPCM. The steady wire rate is about 8.7 KB/s, while decoded PCM is 32 KB/s. No WAV container or recording file is used.
 
 The product installer adds the Core Audio HAL driver. Driver installation requires macOS administrator authorization and restarts Core Audio.
-
-The product installer includes `M5 StopWatch Mic`, so `BlackHole 2ch` is not required in normal use. After verifying the new device, an old Homebrew test installation can be removed with `brew uninstall --cask blackhole-2ch`.
 
 The custom virtual driver is a separate GPLv3 component based on BlackHole. See [`virtual_mic_driver/README.md`](virtual_mic_driver/README.md) and the repository `THIRD_PARTY_NOTICES.md`.
 
@@ -199,14 +239,14 @@ tools/typeless_bridge/build_stopwatch_ble_bridge.sh
 ## Package Release
 
 ```bash
-tools/typeless_bridge/package_release.sh 1.3.5
+tools/typeless_bridge/package_release.sh 1.2.0
 ```
 
 This creates:
 
 ```text
-dist/StopWatch-BLE-Bridge-1.3.5-macOS-arm64.zip
-dist/StopWatch-BLE-Bridge-1.3.5-macOS-arm64.zip.sha256
+dist/StopWatch-BLE-Bridge-1.2.0-macOS-arm64.zip
+dist/StopWatch-BLE-Bridge-1.2.0-macOS-arm64.zip.sha256
 ```
 
 The release package contains only the app bundle. It does not install the LaunchAgent or start the app automatically.
@@ -215,7 +255,7 @@ To build the product installer that installs the app, login LaunchAgent, and
 `M5 StopWatch Mic` Core Audio driver together:
 
 ```bash
-tools/typeless_bridge/package_product_installer.sh 1.3.5
+tools/typeless_bridge/package_product_installer.sh 1.2.0
 ```
 
 The `.pkg` requires administrator authorization because it writes the audio

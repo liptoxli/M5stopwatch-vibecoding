@@ -2182,7 +2182,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
                 if self.microphoneSessionFaulted {
                     self.clearMicrophoneSessionFaultForRetry(source: "Mac shortcut")
                 }
-                self.queueMicrophoneControl(.startVoice)
+                guard self.prepareMicrophoneForTypelessRecording(source: "Mac shortcut") else { return }
                 log("microphone wake requested by Typeless shortcut")
             }
         }
@@ -2888,11 +2888,13 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
 
         do {
             let deviceName = try microphonePipeline.start()
+            log("microphone output pinned: \(microphonePipeline.health().outputRouteDescription)")
             BridgeStatusCenter.shared.microphoneStatus = deviceName == stopWatchVirtualMicrophoneName
                 ? "Ready" : "Ready (BlackHole fallback)"
         } catch {
-            BridgeStatusCenter.shared.microphoneStatus = "Driver missing"
+            BridgeStatusCenter.shared.microphoneStatus = "Output unavailable"
             BridgeStatusCenter.shared.lastError = error.localizedDescription
+            log("microphone enable failed: \(error.localizedDescription)")
             return
         }
         guard let peripheral, let audio = microphoneAudioCharacteristic else {
@@ -2910,6 +2912,12 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     }
 
     private func queueMicrophoneControl(_ command: MicrophoneControlCommand) {
+        if command == .startVoice || command == .continuous {
+            guard !microphoneSessionFaulted, microphonePipeline.isRunning else {
+                log("microphone start blocked: virtual output is not verified or session is interrupted")
+                return
+            }
+        }
         if (command == .startVoice || command == .stopVoice), microphoneOnDemandSupported != true {
             return
         }
@@ -2931,6 +2939,12 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         }
         let command = microphoneControlQueue.removeFirst()
         if command == .startVoice || command == .continuous {
+            guard !microphoneSessionFaulted, microphonePipeline.isRunning else {
+                log("queued microphone start discarded: virtual output lost before BLE write")
+                // Let the write pump continue without recursively growing the stack.
+                DispatchQueue.main.async { [weak self] in self?.pumpGattWrites() }
+                return
+            }
             microphonePipeline.prepareForStreamRestart()
         }
         let type: CBCharacteristicWriteType = control.properties.contains(.write) ? .withResponse : .withoutResponse
@@ -3065,6 +3079,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
                        health.deviceAudioSubscribed ? "true" : "false",
                        health.devicePacketsSent,
                        health.devicePacketsDropped))
+            log("microphone output route valid=\(health.outputRouteValid) \(health.outputRouteDescription)")
         }
 
         if !health.outputHealthy,
@@ -3075,9 +3090,9 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
                 let name = health.outputConfigured
                     ? try microphonePipeline.restartOutput()
                     : try microphonePipeline.start()
-                BridgeStatusCenter.shared.microphoneStatus = audio.isNotifying
-                    ? "Streaming" : (name == stopWatchVirtualMicrophoneName ? "Ready" : "Ready (BlackHole fallback)")
-                log("microphone output recovered: engine rebuilt device=\(name)")
+                BridgeStatusCenter.shared.microphoneStatus = microphoneSessionFaulted
+                    ? "Interrupted - press A" : (name == stopWatchVirtualMicrophoneName ? "Ready" : "Ready (BlackHole fallback)")
+                log("microphone output recovered: pinned output rebuilt device=\(name) \(microphonePipeline.health().outputRouteDescription)")
             } catch {
                 BridgeStatusCenter.shared.microphoneStatus = "Output failed"
                 BridgeStatusCenter.shared.lastError = error.localizedDescription
@@ -3351,9 +3366,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         let shouldStop = typelessSessionActive ||
             lastState?.phase == "recording"
 
-        if !shouldStop {
-            prepareMicrophoneForTypelessRecording(source: "StopWatch A")
-        }
+        if !shouldStop && !prepareMicrophoneForTypelessRecording(source: "StopWatch A") { return }
 
         if !shouldStop && !isTypelessRunning() {
             resetTypelessSessionTracking(clearFocus: true)
@@ -3370,8 +3383,9 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         handleTypelessStopStatus(reason: "toggle")
     }
 
-    private func prepareMicrophoneForTypelessRecording(source: String) {
-        guard SettingsStore.shared.settings.virtualMicrophoneEnabled else { return }
+    @discardableResult
+    private func prepareMicrophoneForTypelessRecording(source: String) -> Bool {
+        guard SettingsStore.shared.settings.virtualMicrophoneEnabled else { return true }
 
         if let peripheral,
            let audio = microphoneAudioCharacteristic,
@@ -3386,15 +3400,20 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
                 rebuildAfterIdle: microphoneOutputPreflightIdleSeconds
             )
             if result.rebuilt {
-                log("microphone recording preflight rebuilt output device=\(result.name) source=\(source)")
+                log("microphone recording preflight rebuilt output device=\(result.name) source=\(source) \(microphonePipeline.health().outputRouteDescription)")
             }
         } catch {
             BridgeStatusCenter.shared.microphoneStatus = "Output failed"
             BridgeStatusCenter.shared.lastError = error.localizedDescription
             log("microphone recording preflight failed source=\(source): \(error.localizedDescription)")
+            queueMicrophoneControl(.stopVoice)
+            triggerMicrophoneSessionFault(reason: "virtual output unavailable: \(error.localizedDescription)",
+                                          stopTypeless: currentTypelessState().phase == "recording")
+            return false
         }
 
         queueMicrophoneControl(.startVoice)
+        return true
     }
 
     private func beginTypelessRecordingStatus(source: String) {
@@ -3450,7 +3469,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             DispatchQueue.main.asyncAfter(deadline: .now() + typelessShortcutRegistrationDelaySeconds) { [weak self] in
                 guard let self, self.typelessLaunchInFlight else { return }
                 self.typelessLaunchInFlight = false
-                self.prepareMicrophoneForTypelessRecording(source: "Typeless auto-launch")
+                guard self.prepareMicrophoneForTypelessRecording(source: "Typeless auto-launch") else { return }
                 self.beginTypelessRecordingStatus(source: "Typeless auto-launch retry")
                 if !self.postTypelessPrimaryShortcut(reason: "auto-launch retry", suppressMicrophoneWake: true) {
                     self.resetTypelessSessionTracking(clearFocus: true)
@@ -3774,6 +3793,15 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
     }
 
     private func checkMicrophoneSessionFault(_ health: MicrophonePipelineHealth, now: Date) {
+        if !microphoneSessionFaulted,
+           SettingsStore.shared.settings.virtualMicrophoneEnabled,
+           SettingsStore.shared.settings.inputMode == .typeless,
+           (typelessSessionActive || lastState?.phase == "recording"),
+           !health.outputRouteValid {
+            triggerMicrophoneSessionFault(reason: "virtual output route lost: \(health.outputRouteDescription)",
+                                          stopTypeless: true)
+            return
+        }
         guard !microphoneSessionFaulted,
               SettingsStore.shared.settings.virtualMicrophoneEnabled,
               SettingsStore.shared.settings.inputMode == .typeless,

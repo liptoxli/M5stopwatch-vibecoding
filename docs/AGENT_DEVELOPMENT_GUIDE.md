@@ -14,10 +14,10 @@
 | 组件 | 版本 | 已验证能力 |
 | --- | --- | --- |
 | StopWatch 固件 | v0.10.6 | 两套 UI、A/B 键、摇晃、实时 BLE 麦克风、额度、四小时热力图、四 Agent、推理滑动、中心四向 Radial、持久化配对保护、Vendor HID 在线自校验、开机录音意图锁存与 BLE 音频背压 |
-| macOS Bridge | v1.3.5 | BLE Companion、虚拟麦克风、Typeless 状态、额度与活动同步、原生 HID 稳定交接、快速重新发现、麦克风录音前自愈、断流逐级重连、Typeless 自动拉起、推理等级同步与回退 |
-| 虚拟麦克风 | `M5 StopWatch Mic` | 16 kHz 单声道 PCM 输入，由 Bridge 写入本机 Core Audio 驱动 |
+| macOS Bridge | v1.3.6 | 保留 BLE Companion、Typeless、额度、活动、HID 恢复与断流重连；新增固定虚拟输出和路由异常静音，自动测试边界见下文 |
+| 虚拟麦克风 | `M5 StopWatch Mic` | Bridge 解码 16 kHz 单声道 PCM，经采样率转换写入虚拟设备；当前回环验收设置为 48 kHz 双声道 |
 
-以下能力已经完成真实设备验收，可以作为回归基线：
+以下既有能力已经完成真实设备验收，可以作为回归基线；不代表 v1.3.6 的双机 Typeless 实测已全部完成：
 
 - A 开始语音，A 或 B 在识别流程中停止；只有回到 Ready 后 B 才恢复确认/发送。
 - StopWatch 麦克风以 IMA-ADPCM 实时传到 Mac，不生成 WAV。
@@ -28,7 +28,7 @@
 - Bridge 必须等待 macOS 原生 IOHID 设备出现后再连接自定义服务；不要移除这一配对时序保护。
 - 不要在 `BLE_GAP_EVENT_REPEAT_PAIRING` 回调中自动删除 peer；NimBLE 会先删除安全密钥再删除 CCCD，后一步失败会留下下次启动无法恢复的半删除 bond。
 - 统一 HID、Bridge、麦克风、电池和 Service Changed 当前会持久化 10 条 CCCD，`CONFIG_BT_NIMBLE_MAX_CCCDS` 不得低于 16。
-- 新录音开始前会预检虚拟输入路由，空闲超过 8 秒或输出不健康时重建音频引擎。
+- 新录音开始前会预检虚拟输入和实际输出路由，空闲超过 8 秒或输出不健康时重建输出管线。
 - Typeless 未运行时，Bridge 会在后台启动它，等待快捷键注册后补发当前这一次 A 键；修改这条链路时必须保留单次补发和超时保护。
 
 未读 task 的解析、同步和列表 UI 已有代码基础，但当前默认主界面没有绑定“打开任务列表”的入口。除非需求明确要求，不要把它写成已经交付的默认操作，也不要擅自占用中心点或四个 Agent 点。
@@ -78,7 +78,9 @@ Mac 本机 Codex 状态
 | 模块 | 主要文件 | 作用 |
 | --- | --- | --- |
 | Bridge 主程序 | `tools/typeless_bridge/stopwatch_ble_bridge.swift` | 菜单栏、CoreBluetooth、Codex 状态、Typeless、音频管线和重连 |
-| Bridge 构建 | `tools/typeless_bridge/build_stopwatch_ble_bridge.sh` | 构建 `.app` |
+| 音频管线 | `tools/typeless_bridge/stopwatch_microphone.swift` | ADPCM 解码、PCM 缓冲、AUConverter、固定设备 AUHAL、路由静音和健康快照 |
+| 音频路由测试 | `tools/typeless_bridge/tests/` | 静音门控、物理输出拒绝、生命周期、虚拟回环和进程实际输出审计 |
+| Bridge 构建 | `tools/typeless_bridge/build_stopwatch_ble_bridge.sh` | 构建可执行程序；安装或打包脚本生成 `.app` |
 | 本机安装 | `tools/typeless_bridge/install_launch_agent.sh` | 安装 App 与 LaunchAgent |
 | 发布打包 | `package_release.sh`、`package_product_installer.sh` | ZIP/PKG 发布产物 |
 | 虚拟麦克风 | `tools/typeless_bridge/virtual_mic_driver/` | `M5 StopWatch Mic` Core Audio HAL 驱动 |
@@ -183,6 +185,16 @@ v0.10.5 起，A 键开始语音时先锁存用户意图。如果 macOS 的自定
 
 v0.10.6 起，音频任务在 NimBLE 共享 mbuf 紧张时最多等待 80ms，并保留至少 4 个 mbuf 给 HID、状态和 CCCD 流量。stats v4 在原有计数后增加 `last notify error`、`consecutive failures` 和 `free mbufs`。Bridge 在持续断流时先重建 Audio 订阅，60 秒内再次出错则重建 BLE 连接；仍会终止当前 Typeless 听写并让用户重说，不会自动拼接丢失的语音中段。
 
+Bridge v1.3.6 的 Mac 音频出口使用显式 AUHAL，而不是依赖默认输出的音频引擎。入口是 `VirtualMicrophoneOutput`，路由门控是 `MicrophoneRouteGate`：
+
+- 可见输入 UID 为 `M5StopWatchMic_UID`，隐藏输出 UID 为 `M5StopWatchMic_2_UID`；原有兼容回退仅允许 `BlackHole2ch_UID` 且 transport 为 Virtual。不能仅按显示名称选设备，更不能回退到系统扬声器。
+- 初始化时保持静音；绑定、启动后核验真实设备，再开放音频。最终输出回调在转换前后都检查 `CurrentDevice`，失败则清零缓冲并锁定故障，防止转换器尾音继续输出。
+- 设备失效或采样率改变会触发静音和重建尝试。录音前、排队开流时、实际发送开流命令前和健康检查均不能跳过验证。
+- `outputRouteValid` 表示路由核验，`outputHealthy` 还包括输出运行与回调心跳。它们不等于 Typeless 已收到音频，仍须检查虚拟输入电平。
+- 16 kHz 单声道是 BLE 解码源格式，不是要求修改虚拟声卡到 16 kHz。保留 48 kHz 虚拟声卡设置；实时切换到 16 kHz 后无声仍是已知问题，详见 Bridge Changelog。
+
+Mac mini 的 16→48 kHz 回环和故障静音已通过；iMac 的路由保护已通过，但完整回环被测试程序的麦克风授权阻挡。双机实际 Typeless 录入仍需验收。更新 Bridge 不应重置配对、修改驱动、改变现有麦克风开关或重刷固件。
+
 ### 4.6 活动热力图与额度
 
 - 周额度只显示 weekly window，不恢复已经移除的 5h window。
@@ -245,6 +257,7 @@ UI 支持 solid、breath、shallow breath 等宿主效果。Agent 点的触摸�
 | A/B 语音交互 | `app_codex.cpp` + Bridge 状态机 | 两套 UI 分别写不同逻辑 |
 | 波形刷新或 UI 功耗 | `CodexView::frameIntervalMs()` 和差分刷新 | BLE connection interval |
 | 音频格式/帧长 | `ble_microphone.cpp`、`ima_adpcm.*`、Bridge 解码 | 只改一端 |
+| Mac 虚拟音频路由/静音 | `stopwatch_microphone.swift` + Bridge 录音预检 | BLE 格式、系统默认扬声器、配对与 HID |
 | Bridge 菜单与状态同步 | `stopwatch_ble_bridge.swift` | 固件 NVS 配置格式，除非同时迁移 |
 | 额度/活动算法 | Bridge panel builder + `codex_quota_client.cpp` | UI 里重复计算第二份真相 |
 
@@ -316,7 +329,21 @@ tail -n 120 ~/Library/Logs/stopwatch-ble-bridge.log
 - `Device event stream subscribed`
 - HID Report recovery subscription ready
 - `microphone health ... output=healthy`
+- `microphone output route valid=true expected=... actual=...`，并核对实际输出 UID
 - `dropped=0` 或可解释的短时丢包
+
+音频输出修改还需要运行：
+
+```bash
+bash tools/typeless_bridge/tests/run_audio_route_tests.sh
+bash tools/typeless_bridge/tests/run_audio_route_tests.sh --hardware --loopback
+# 对已经启用麦克风的 Bridge 进程进行只读核验：
+bash tools/typeless_bridge/tests/run_audio_route_tests.sh --audit-pid <bridge-pid>
+```
+
+回环测试仅向 M5 虚拟输出发送合成音并统计虚拟输入电平，不保存录音、不采集物理麦克风。macOS 仍可能要求测试程序的麦克风权限；SSH 下无授权得到的零电平不应直接判为音频管线故障。需要授权时由用户在登录会话明确确认，不得修改权限数据库。`--audit-pid` 返回 2 表示尚无活动输出，返回 1 表示校验失败。
+
+`--hardware --rates` 是可选诊断，会临时修改虚拟设备采样率并在正常结束或可捕获错误时恢复；当前存在失败案例，不属于已通过的发布验收，勿在录音期间运行。进程被强制终止时应手动核对采样率。默认测试不会变更设备采样率或系统默认输入/输出。
 
 ### 7.4 最小回归矩阵
 
@@ -325,7 +352,7 @@ tail -n 120 ~/Library/Logs/stopwatch-ble-bridge.log
 | UI | 两套主题、圆屏边缘裁切、状态变化、息屏恢复 |
 | 触摸 | 短触取消、长按一次提交、滑动换目标、录音时不误触 |
 | HID | A/B、四 Agent、推理、Radial、重连后再次触发 |
-| 麦克风 | 开始、停止、长语音、虚拟输入电平、丢包统计 |
+| 麦克风 | 开始、停止、长语音、虚拟输入电平、丢包统计、输出 UID、拒绝物理扬声器及异常静音 |
 | Bridge | 登录启动、退出行为、自动重连、菜单配置保留 |
 | 电源 | 空闲温度、屏幕变暗、息屏、录音后 CPU/Codec 回落 |
 

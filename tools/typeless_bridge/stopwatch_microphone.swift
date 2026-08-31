@@ -1,4 +1,3 @@
-import AVFoundation
 import AudioToolbox
 import CoreAudio
 import CoreBluetooth
@@ -23,7 +22,7 @@ private let imaStepTable = [
     18500, 20350, 22385, 24623, 27086, 29794, 32767,
 ]
 
-private final class MicrophoneAudioRing {
+final class MicrophoneAudioRing {
     private var samples = Array(repeating: Float(0), count: Int(microphoneSampleRate * 3))
     private var readIndex = 0
     private var writeIndex = 0
@@ -68,6 +67,8 @@ struct MicrophonePipelineHealth {
     let outputConfigured: Bool
     let engineRunning: Bool
     let outputHealthy: Bool
+    let outputRouteValid: Bool
+    let outputRouteDescription: String
     let outputAge: TimeInterval?
     let renderAge: TimeInterval?
     let renderCount: UInt64
@@ -103,7 +104,47 @@ private final class MicrophoneRenderHeartbeat {
     }
 }
 
-private enum MicrophoneCoreAudio {
+enum MicrophoneCoreAudio {
+    static let allowedOutputUIDs: Set<String> = ["M5StopWatchMic_2_UID", "BlackHole2ch_UID"]
+
+    static func uid(of device: AudioDeviceID) -> String? {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDeviceUID,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var value: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &value) == noErr else { return nil }
+        return value?.takeRetainedValue() as String?
+    }
+
+    static func isAllowedOutput(_ device: AudioDeviceID) -> Bool {
+        guard let uid = uid(of: device), allowedOutputUIDs.contains(uid) else { return false }
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyTransportType,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var transport: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        return AudioObjectGetPropertyData(device, &address, 0, nil, &size, &transport) == noErr &&
+            transport == kAudioDeviceTransportTypeVirtual
+    }
+
+    static func sampleRate(of device: AudioDeviceID) -> Double? {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyNominalSampleRate,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var rate: Float64 = 0
+        var size = UInt32(MemoryLayout<Float64>.size)
+        return AudioObjectGetPropertyData(device, &address, 0, nil, &size, &rate) == noErr ? rate : nil
+    }
+
+    static func isAlive(_ device: AudioDeviceID) -> Bool {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDeviceIsAlive,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var alive: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        return AudioObjectGetPropertyData(device, &address, 0, nil, &size, &alive) == noErr && alive != 0
+    }
     static func devices() -> [AudioDeviceID] {
         var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
                                                  mScope: kAudioObjectPropertyScopeGlobal,
@@ -122,7 +163,7 @@ private enum MicrophoneCoreAudio {
         var value: Unmanaged<CFString>?
         var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
         guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &value) == noErr else { return nil }
-        return value?.takeUnretainedValue() as String?
+        return value?.takeRetainedValue() as String?
     }
 
     static func device(uid: String) -> AudioDeviceID? {
@@ -142,11 +183,11 @@ private enum MicrophoneCoreAudio {
 
     static func virtualDevice() -> (input: AudioDeviceID, output: AudioDeviceID, name: String)? {
         let allDevices = devices()
-        if let input = allDevices.first(where: { name(of: $0)?.localizedCaseInsensitiveCompare(stopWatchVirtualMicrophoneName) == .orderedSame }),
-           let output = device(uid: "M5StopWatchMic_2_UID") {
+        if let input = device(uid: "M5StopWatchMic_UID"),
+           let output = device(uid: "M5StopWatchMic_2_UID"), isAllowedOutput(output) {
             return (input, output, stopWatchVirtualMicrophoneName)
         }
-        if let blackHole = allDevices.first(where: { name(of: $0)?.localizedCaseInsensitiveCompare("BlackHole 2ch") == .orderedSame }) {
+        if let blackHole = allDevices.first(where: { uid(of: $0) == "BlackHole2ch_UID" }), isAllowedOutput(blackHole) {
             return (blackHole, blackHole, "BlackHole 2ch")
         }
         return nil
@@ -175,52 +216,268 @@ private enum MicrophoneCoreAudio {
     }
 }
 
-private final class VirtualMicrophoneOutput {
-    private let engine = AVAudioEngine()
-    private let heartbeat = MicrophoneRenderHeartbeat()
+/// Fail closed. A route fault stays latched until the output is rebuilt, even
+/// if the device subsequently reappears. Never replay buffered speech on repair.
+final class MicrophoneRouteGate {
+    let expectedDevice: AudioDeviceID
+    private let lock = NSLock()
+    private var enabled = false
+    private var faulted = false
+
+    init(device: AudioDeviceID) { expectedDevice = device }
+    func arm() { lock.lock(); defer { lock.unlock() }; enabled = !faulted }
+    func mute() { lock.lock(); defer { lock.unlock() }; enabled = false }
+    func invalidate() { lock.lock(); defer { lock.unlock() }; enabled = false; faulted = true }
+    var isFaulted: Bool { lock.lock(); defer { lock.unlock() }; return faulted }
+    func permits(_ actual: AudioDeviceID?) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard actual == expectedDevice, expectedDevice != kAudioObjectUnknown else {
+            enabled = false; faulted = true
+            return false
+        }
+        return enabled && !faulted
+    }
+}
+
+private func microphoneOutputError(_ message: String, _ status: OSStatus = -1) -> NSError {
+    NSError(domain: "M5StopWatchMic", code: Int(status), userInfo: [NSLocalizedDescriptionKey: message])
+}
+
+private func checkMicrophoneAudioStatus(_ status: OSStatus, _ operation: String) throws {
+    guard status == noErr else { throw microphoneOutputError("\(operation) (Core Audio \(status))", status) }
+}
+
+private func currentMicrophoneOutputDevice(_ unit: AudioUnit?) -> AudioDeviceID? {
+    guard let unit else { return nil }
+    var device: AudioDeviceID = kAudioObjectUnknown
+    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+    let status = AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
+                                     kAudioUnitScope_Global, 0, &device, &size)
+    return status == noErr && device != kAudioObjectUnknown ? device : nil
+}
+
+private final class MicrophoneOutputContext {
+    let ring: MicrophoneAudioRing
+    let gate: MicrophoneRouteGate
+    let heartbeat = MicrophoneRenderHeartbeat()
+    var outputUnit: AudioUnit?
+    var converterUnit: AudioUnit?
+    var sampleRate: Double = 0
+    let deviceUID: String
+    init(ring: MicrophoneAudioRing, device: AudioDeviceID) {
+        self.ring = ring
+        gate = MicrophoneRouteGate(device: device)
+        deviceUID = MicrophoneCoreAudio.uid(of: device) ?? ""
+    }
+    func routeMatches() -> Bool {
+        currentMicrophoneOutputDevice(outputUnit) == gate.expectedDevice &&
+            MicrophoneCoreAudio.uid(of: gate.expectedDevice) == deviceUID &&
+            MicrophoneCoreAudio.isAlive(gate.expectedDevice) &&
+            MicrophoneCoreAudio.sampleRate(of: gate.expectedDevice) == sampleRate
+    }
+}
+
+private func silenceMicrophoneOutput(_ list: UnsafeMutablePointer<AudioBufferList>) {
+    for buffer in UnsafeMutableAudioBufferListPointer(list) {
+        if let data = buffer.mData { memset(data, 0, Int(buffer.mDataByteSize)) }
+    }
+}
+
+private let microphoneSourceCallback: AURenderCallback = { ref, _, _, _, frames, data in
+    guard let data else { return kAudio_ParamError }
+    let context = Unmanaged<MicrophoneOutputContext>.fromOpaque(ref).takeUnretainedValue()
+    let buffers = UnsafeMutableAudioBufferListPointer(data)
+    guard let first = buffers.first, first.mNumberChannels == 1,
+          first.mDataByteSize >= frames * 4, let pointer = first.mData?.assumingMemoryBound(to: Float.self) else {
+        silenceMicrophoneOutput(data)
+        context.gate.invalidate()
+        return kAudio_ParamError
+    }
+    context.ring.render(into: pointer, frames: Int(frames))
+    return noErr
+}
+
+/// Gate the FINAL output callback, not merely the source: a sample-rate
+/// converter can retain previously supplied samples in its own buffer.
+private let microphoneOutputCallback: AURenderCallback = { ref, flags, time, _, frames, data in
+    guard let data else { return kAudio_ParamError }
+    let context = Unmanaged<MicrophoneOutputContext>.fromOpaque(ref).takeUnretainedValue()
+    guard context.gate.permits(currentMicrophoneOutputDevice(context.outputUnit)),
+          let converter = context.converterUnit else {
+        silenceMicrophoneOutput(data)
+        flags.pointee.insert(.unitRenderAction_OutputIsSilence)
+        return noErr
+    }
+    flags.pointee.remove(.unitRenderAction_OutputIsSilence)
+    let status = AudioUnitRender(converter, flags, time, 0, frames, data)
+    guard status == noErr, context.gate.permits(currentMicrophoneOutputDevice(context.outputUnit)) else {
+        context.gate.invalidate()
+        silenceMicrophoneOutput(data)
+        flags.pointee.insert(.unitRenderAction_OutputIsSilence)
+        return noErr
+    }
+    flags.pointee.remove(.unitRenderAction_OutputIsSilence)
+    context.heartbeat.markRendered()
+    return noErr
+}
+
+private let microphoneUnitRouteChanged: AudioUnitPropertyListenerProc = { ref, _, _, _, _ in
+    let context = Unmanaged<MicrophoneOutputContext>.fromOpaque(ref).takeUnretainedValue()
+    if !context.routeMatches() { context.gate.invalidate() }
+}
+
+private let microphoneDeviceChanged: AudioObjectPropertyListenerProc = { _, _, _, ref in
+    guard let ref else { return noErr }
+    let context = Unmanaged<MicrophoneOutputContext>.fromOpaque(ref).takeUnretainedValue()
+    if !context.routeMatches() { context.gate.invalidate() }
+    return noErr
+}
+
+/// Explicit AUHAL + AUConverter. Unlike an AVAudioEngine default output node,
+/// this output owns one fixed virtual device; system speaker selection is not
+/// part of this graph. AUConverter retains the original 16 kHz mono source and
+/// converts to the device rate without changing the system's sample rate.
+final class VirtualMicrophoneOutput {
+    private let context: MicrophoneOutputContext
+    private let device: AudioDeviceID
+    private let deviceUID: String
+    private var sampleRate: Double = 0
     private let startedAt = Date()
-    private var source: AVAudioSourceNode!
+    private var unitListenerInstalled = false
+    private var deviceListeners: [AudioObjectPropertyAddress] = []
 
     init(ring: MicrophoneAudioRing, device: AudioDeviceID) throws {
-        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: microphoneSampleRate,
-                                         channels: 1, interleaved: false) else {
-            throw NSError(domain: "M5StopWatchMic", code: 1, userInfo: [NSLocalizedDescriptionKey: "Cannot create audio format"])
+        guard MicrophoneCoreAudio.isAllowedOutput(device), MicrophoneCoreAudio.isAlive(device),
+              let uid = MicrophoneCoreAudio.uid(of: device) else {
+            throw microphoneOutputError("Refusing non-virtual or missing microphone output device \(device)")
         }
-        source = AVAudioSourceNode(format: format) { [weak ring, weak heartbeat] _, _, frameCount, list in
-            let buffers = UnsafeMutableAudioBufferListPointer(list)
-            guard let pointer = buffers.first?.mData?.assumingMemoryBound(to: Float.self) else { return noErr }
-            ring?.render(into: pointer, frames: Int(frameCount))
-            for index in 1..<buffers.count {
-                buffers[index].mData?.assumingMemoryBound(to: Float.self).update(from: pointer, count: Int(frameCount))
-            }
-            heartbeat?.markRendered()
-            return noErr
-        }
-        engine.attach(source)
-        engine.connect(source, to: engine.mainMixerNode, format: format)
-        guard let audioUnit = engine.outputNode.audioUnit else {
-            throw NSError(domain: "M5StopWatchMic", code: 2, userInfo: [NSLocalizedDescriptionKey: "Cannot access audio output"])
-        }
-        var value = device
-        let status = AudioUnitSetProperty(audioUnit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global,
-                                          0, &value, UInt32(MemoryLayout<AudioDeviceID>.size))
-        guard status == noErr else {
-            throw NSError(domain: "M5StopWatchMic", code: Int(status), userInfo: [NSLocalizedDescriptionKey: "Cannot open virtual microphone output"])
-        }
-        engine.prepare()
-        try engine.start()
+        self.device = device
+        deviceUID = uid
+        context = MicrophoneOutputContext(ring: ring, device: device)
+        do { try configure() } catch { stop(); throw error }
     }
 
-    func stop() { engine.stop() }
+    private func makeUnit(type: OSType, subtype: OSType) throws -> AudioUnit {
+        var description = AudioComponentDescription(componentType: type, componentSubType: subtype,
+                                                     componentManufacturer: kAudioUnitManufacturer_Apple,
+                                                     componentFlags: 0, componentFlagsMask: 0)
+        guard let component = AudioComponentFindNext(nil, &description) else {
+            throw microphoneOutputError("Cannot find microphone audio component")
+        }
+        var unit: AudioUnit?
+        try checkMicrophoneAudioStatus(AudioComponentInstanceNew(component, &unit), "Create microphone audio unit")
+        guard let unit else { throw microphoneOutputError("Cannot create microphone audio unit") }
+        return unit
+    }
+
+    private func configure() throws {
+        let output = try makeUnit(type: kAudioUnitType_Output, subtype: kAudioUnitSubType_HALOutput)
+        context.outputUnit = output
+        var enabled: UInt32 = 1, disabled: UInt32 = 0
+        try checkMicrophoneAudioStatus(AudioUnitSetProperty(output, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output, 0, &enabled, 4), "Enable virtual output")
+        try checkMicrophoneAudioStatus(AudioUnitSetProperty(output, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, 1, &disabled, 4), "Disable hardware input")
+        var target = device
+        try checkMicrophoneAudioStatus(AudioUnitSetProperty(output, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &target, UInt32(MemoryLayout<AudioDeviceID>.size)), "Bind virtual microphone output")
+        var hardwareFormat = AudioStreamBasicDescription()
+        var formatSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        try checkMicrophoneAudioStatus(AudioUnitGetProperty(output, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 0, &hardwareFormat, &formatSize), "Read virtual device format")
+        guard hardwareFormat.mSampleRate > 0, hardwareFormat.mSampleRate.isFinite,
+              hardwareFormat.mChannelsPerFrame == 2 else {
+            throw microphoneOutputError("Unsupported virtual microphone device format")
+        }
+        sampleRate = hardwareFormat.mSampleRate
+        context.sampleRate = sampleRate
+        var nativeFormat = AudioStreamBasicDescription(mSampleRate: sampleRate, mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagsNativeFloatPacked | kAudioFormatFlagIsNonInterleaved,
+            mBytesPerPacket: 4, mFramesPerPacket: 1, mBytesPerFrame: 4, mChannelsPerFrame: 2, mBitsPerChannel: 32, mReserved: 0)
+        var sourceFormat = AudioStreamBasicDescription(mSampleRate: microphoneSampleRate, mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagsNativeFloatPacked,
+            mBytesPerPacket: 4, mFramesPerPacket: 1, mBytesPerFrame: 4, mChannelsPerFrame: 1, mBitsPerChannel: 32, mReserved: 0)
+        try checkMicrophoneAudioStatus(AudioUnitSetProperty(output, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &nativeFormat, formatSize), "Configure virtual output format")
+        let converter = try makeUnit(type: kAudioUnitType_FormatConverter, subtype: kAudioUnitSubType_AUConverter)
+        context.converterUnit = converter
+        try checkMicrophoneAudioStatus(AudioUnitSetProperty(converter, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &sourceFormat, formatSize), "Configure PCM input format")
+        try checkMicrophoneAudioStatus(AudioUnitSetProperty(converter, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 0, &nativeFormat, formatSize), "Configure sample-rate conversion")
+        var channels: [Int32] = [0, 0]
+        try channels.withUnsafeMutableBytes { bytes in
+            try checkMicrophoneAudioStatus(AudioUnitSetProperty(converter, kAudioOutputUnitProperty_ChannelMap, kAudioUnitScope_Output, 0, bytes.baseAddress!, UInt32(bytes.count)), "Map mono microphone to both virtual channels")
+        }
+        // A converter may request more source frames than the hardware slice.
+        var maxFrames: UInt32 = 8192
+        for unit in [output, converter] {
+            try checkMicrophoneAudioStatus(AudioUnitSetProperty(unit, kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global, 0, &maxFrames, 4), "Configure microphone render slice")
+        }
+        let ref = Unmanaged.passUnretained(context).toOpaque()
+        var sourceCallback = AURenderCallbackStruct(inputProc: microphoneSourceCallback, inputProcRefCon: ref)
+        var outputCallback = AURenderCallbackStruct(inputProc: microphoneOutputCallback, inputProcRefCon: ref)
+        let callbackSize = UInt32(MemoryLayout<AURenderCallbackStruct>.size)
+        try checkMicrophoneAudioStatus(AudioUnitSetProperty(converter, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0, &sourceCallback, callbackSize), "Install PCM callback")
+        try checkMicrophoneAudioStatus(AudioUnitSetProperty(output, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0, &outputCallback, callbackSize), "Install guarded virtual output callback")
+        try checkMicrophoneAudioStatus(AudioUnitInitialize(converter), "Initialize microphone converter")
+        try checkMicrophoneAudioStatus(AudioUnitInitialize(output), "Initialize pinned virtual output")
+        try checkMicrophoneAudioStatus(AudioUnitAddPropertyListener(output, kAudioOutputUnitProperty_CurrentDevice, microphoneUnitRouteChanged, ref), "Watch microphone output route")
+        unitListenerInstalled = true
+        for selector in [kAudioDevicePropertyDeviceIsAlive, kAudioDevicePropertyNominalSampleRate] {
+            var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+            try checkMicrophoneAudioStatus(AudioObjectAddPropertyListener(device, &address, microphoneDeviceChanged, ref), "Watch virtual device changes")
+            deviceListeners.append(address)
+        }
+        guard routeMatches() else { throw microphoneOutputError("Virtual output route verification failed before start") }
+        // Start muted; no buffered audio can reach an unverified output.
+        try checkMicrophoneAudioStatus(AudioOutputUnitStart(output), "Start pinned virtual output")
+        guard routeMatches(), !context.gate.isFaulted else { throw microphoneOutputError("Virtual output route verification failed after start") }
+        context.gate.arm()
+    }
+
+    private func routeMatches() -> Bool {
+        context.routeMatches()
+    }
+
+    func stop() {
+        context.gate.mute()
+        let ref = Unmanaged.passUnretained(context).toOpaque()
+        if let unit = context.outputUnit {
+            AudioOutputUnitStop(unit)
+            if unitListenerInstalled {
+                AudioUnitRemovePropertyListenerWithUserData(unit, kAudioOutputUnitProperty_CurrentDevice, microphoneUnitRouteChanged, ref)
+                unitListenerInstalled = false
+            }
+            for var address in deviceListeners {
+                AudioObjectRemovePropertyListener(device, &address, microphoneDeviceChanged, ref)
+            }
+            deviceListeners.removeAll()
+            AudioUnitUninitialize(unit)
+            AudioComponentInstanceDispose(unit)
+            context.outputUnit = nil
+        }
+        if let unit = context.converterUnit {
+            AudioUnitUninitialize(unit)
+            AudioComponentInstanceDispose(unit)
+            context.converterUnit = nil
+        }
+    }
+
+    deinit { stop() }
 
     func health(now: Date) -> (engineRunning: Bool, healthy: Bool, outputAge: TimeInterval,
-                               renderAge: TimeInterval?, renderCount: UInt64) {
-        let render = heartbeat.snapshot(now: now)
+                               renderAge: TimeInterval?, renderCount: UInt64, routeValid: Bool, routeDescription: String) {
+        let actual = currentMicrophoneOutputDevice(context.outputUnit)
+        let routeValid = routeMatches() && !context.gate.isFaulted
+        if !routeValid { context.gate.invalidate() }
+        var running: UInt32 = 0, size: UInt32 = 4
+        if let unit = context.outputUnit {
+            if AudioUnitGetProperty(unit, kAudioOutputUnitProperty_IsRunning, kAudioUnitScope_Global, 0, &running, &size) != noErr { running = 0 }
+        }
+        let render = context.heartbeat.snapshot(now: now)
         let outputAge = now.timeIntervalSince(startedAt)
-        let renderResponsive = (render.age.map { $0 <= microphoneOutputStallSeconds })
-            ?? (outputAge <= microphoneOutputStallSeconds)
-        return (engine.isRunning, engine.isRunning && renderResponsive, outputAge, render.age, render.count)
+        let responsive = render.age.map { $0 <= microphoneOutputStallSeconds } ?? (outputAge <= microphoneOutputStallSeconds)
+        let description = "expected=\(deviceUID):\(device) actual=\(actual.map(String.init) ?? "unknown") rate=\(Int(sampleRate))"
+        return (running != 0, running != 0 && responsive && routeValid, outputAge, render.age, render.count, routeValid, description)
     }
+
+#if DEBUG
+    func invalidateRouteForTesting() { context.gate.invalidate() }
+#endif
 }
 
 final class StopWatchMicrophonePipeline {
@@ -247,13 +504,14 @@ final class StopWatchMicrophonePipeline {
     var isRunning: Bool { output?.health(now: Date()).healthy == true }
 
     /// Reassert the virtual input route before a new dictation session.  After
-    /// macOS rebuilds its audio graph, AVAudioEngine can continue reporting
-    /// `isRunning` even though the virtual device route held by an existing
-    /// client is no longer usable.  Rebuilding after a short idle period keeps
+    /// macOS rebuilds its audio graph, callbacks may keep running even though
+    /// the virtual device route held by an existing
+    /// client is no longer usable. Rebuilding after a short idle period keeps
     /// the first recording after reconnect/wake from inheriting that stale
     /// route, while consecutive recordings keep the warm engine.
     func prepareForRecording(rebuildAfterIdle idleSeconds: TimeInterval) throws -> (name: String, rebuilt: Bool) {
         guard let device = MicrophoneCoreAudio.virtualDevice() else {
+            output?.stop(); output = nil; ring.reset()
             throw NSError(domain: "M5StopWatchMic", code: 3,
                           userInfo: [NSLocalizedDescriptionKey: "Virtual microphone is not installed: \(stopWatchVirtualMicrophoneName)"])
         }
@@ -278,7 +536,8 @@ final class StopWatchMicrophonePipeline {
     }
 
     func start() throws -> String {
-        if let outputDeviceName, output != nil { return outputDeviceName }
+        if let outputDeviceName, output?.health(now: Date()).healthy == true { return outputDeviceName }
+        if output != nil { return try restartOutput() }
         guard let device = MicrophoneCoreAudio.virtualDevice() else {
             throw NSError(domain: "M5StopWatchMic", code: 3,
                           userInfo: [NSLocalizedDescriptionKey: "Virtual microphone is not installed: \(stopWatchVirtualMicrophoneName)"])
@@ -295,13 +554,14 @@ final class StopWatchMicrophonePipeline {
     }
 
     func restartOutput() throws -> String {
+        // Mute/dispose first, including when the virtual device has disappeared.
+        output?.stop()
+        output = nil
+        ring.reset()
         guard let device = MicrophoneCoreAudio.virtualDevice() else {
             throw NSError(domain: "M5StopWatchMic", code: 3,
                           userInfo: [NSLocalizedDescriptionKey: "Virtual microphone is not installed: \(stopWatchVirtualMicrophoneName)"])
         }
-        output?.stop()
-        output = nil
-        ring.reset()
         let replacement = try VirtualMicrophoneOutput(ring: ring, device: device.output)
         do {
             try MicrophoneCoreAudio.setDefaultInput(device.input)
@@ -422,6 +682,8 @@ final class StopWatchMicrophonePipeline {
             outputConfigured: output != nil,
             engineRunning: outputHealth?.engineRunning ?? false,
             outputHealthy: outputHealth?.healthy ?? false,
+            outputRouteValid: outputHealth?.routeValid ?? false,
+            outputRouteDescription: outputHealth?.routeDescription ?? "not configured",
             outputAge: outputHealth?.outputAge,
             renderAge: outputHealth?.renderAge,
             renderCount: outputHealth?.renderCount ?? 0,
