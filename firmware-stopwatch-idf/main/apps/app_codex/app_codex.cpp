@@ -66,6 +66,7 @@ void AppCodex::onOpen()
     _confirm_long_sent = false;
     _confirm_routes_to_primary = false;
     _voice_session_interrupted = false;
+    _voice_start_gate.cancel();
     _voice_mode = view::CodexView::VoiceMode::Idle;
     _applied_voice_mode = view::CodexView::VoiceMode::Idle;
     _voice_mode_since_ms = GetHAL().millis();
@@ -95,6 +96,7 @@ void AppCodex::onRunning()
     }
 
     handleBluetoothKeys();
+    pollPendingVoiceStart(GetHAL().millis());
     handleTouchControls();
     const uint32_t now = GetHAL().millis();
     if (ble_bridge::consume_voice_start_timeout()) {
@@ -282,6 +284,7 @@ void AppCodex::enterVoiceInterrupted(uint32_t now)
     _voice_mode = view::CodexView::VoiceMode::Interrupted;
     _voice_mode_since_ms = now;
     ble_bridge::set_voice_capture_active(false);
+    _voice_start_gate.cancel();
     _fault_first_vibration_at_ms = now + 300;
     _fault_second_vibration_at_ms = now + 760;
     mclog::tagInfo(getAppInfo().name, "Voice session interrupted; waiting for retry");
@@ -310,7 +313,8 @@ bool AppCodex::shouldRouteConfirmAsPrimary() const
     }
     const bool host_voice_busy = ble_bridge::host_voice_valid() &&
                                  ble_bridge::host_voice_phase() != ble_bridge::VoicePhase::Idle;
-    return _voice_session_interrupted ||
+    return _voice_start_gate.pending() ||
+           _voice_session_interrupted ||
            ble_bridge::voice_session_interrupted() ||
            host_voice_busy ||
            _voice_active ||
@@ -335,6 +339,23 @@ void AppCodex::handlePrimaryInputDown(const char* sourceKey)
         mclog::tagInfo(getAppInfo().name, "Voice interruption cleared by {} retry", sourceKey);
     }
     const bool starting_voice = !typeless_mode || !_voice_active;
+    if (typeless_mode && starting_voice) {
+        const auto action = _voice_start_gate.request(ble_bridge::microphone_voice_ready(), now);
+        if (action == VoiceStartGate::Action::None) {
+            // Latch capture at the device, but do not send the HID toggle until
+            // the Bridge confirms notification + arm + virtual output readiness.
+            ble_bridge::set_voice_capture_active(true);
+            GetHAL().vibrate(35, 45);
+            if (_view) {
+                LvglLockGuard lock;
+                _view->showActionMessage("MIC LINKING");
+            }
+            mclog::tagInfo(getAppInfo().name,
+                           "Voice start held until microphone handshake via {}",
+                           sourceKey);
+            return;
+        }
+    }
     _primary_input_down_ms = now;
     if (typeless_mode && _voice_active) {
         _voice_mode = view::CodexView::VoiceMode::Processing;
@@ -350,6 +371,12 @@ void AppCodex::handlePrimaryInputDown(const char* sourceKey)
 
 void AppCodex::handlePrimaryInputUp(const char* sourceKey)
 {
+    if (_voice_start_gate.pending()) {
+        mclog::tagDebug(getAppInfo().name,
+                        "BLE key {}: release held with pending microphone start",
+                        sourceKey);
+        return;
+    }
     const bool typeless_mode = ble_bridge::is_typeless_input_mode();
     _primary_input_down_ms = 0;
     if (!typeless_mode && _voice_active) {
@@ -360,6 +387,30 @@ void AppCodex::handlePrimaryInputUp(const char* sourceKey)
     }
     mclog::tagDebug(getAppInfo().name, "BLE key {}: primary input up", sourceKey);
     ble_bridge::send_typeless_option(ble_bridge::ButtonAction::Up);
+}
+
+void AppCodex::pollPendingVoiceStart(uint32_t now)
+{
+    const auto action = _voice_start_gate.poll(ble_bridge::microphone_voice_ready(), now);
+    if (action == VoiceStartGate::Action::None) {
+        return;
+    }
+    if (action == VoiceStartGate::Action::Timeout) {
+        ble_bridge::set_voice_capture_active(false);
+        enterVoiceInterrupted(now);
+        mclog::tagInfo(getAppInfo().name,
+                       "Voice start rejected after microphone readiness timeout");
+        return;
+    }
+
+    // Complete the original short press exactly once. Sending both edges here
+    // avoids a stuck HID key because the user's physical release happened while
+    // the request was still pending.
+    GetHAL().vibrate(55, 75);
+    mclog::tagInfo(getAppInfo().name,
+                   "Microphone handshake ready; committing pending voice start");
+    handlePrimaryInputDown("deferred-ready");
+    handlePrimaryInputUp("deferred-ready");
 }
 
 void AppCodex::handleBluetoothKeys()
@@ -492,6 +543,7 @@ void AppCodex::onClose()
     }
     codex_micro_hid::send_radial(0.75f, 0.0f);
     ble_bridge::set_voice_capture_active(false);
+    _voice_start_gate.cancel();
     _key_manager.reset();
     _voice_active = false;
     _applied_voice_active = false;

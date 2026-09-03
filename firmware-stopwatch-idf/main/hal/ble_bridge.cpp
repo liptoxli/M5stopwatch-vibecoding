@@ -137,6 +137,8 @@ HostKeyBinding g_shake_binding = {0, 0};
 std::string g_confirm_long_action = "Command+Return";
 std::string g_shake_action = "Clear Input";
 bool g_host_config_loaded = false;
+bool g_host_microphone_gate_enabled = false;
+bool g_host_microphone_ready = false;
 int g_panel_seq = -1;
 int g_panel_expected_parts = 0;
 int g_panel_next_part = 1;
@@ -239,6 +241,7 @@ void load_host_input_config()
     g_confirm_long_binding.keycode = clamp_hid_byte(settings.GetInt("cfm_l_key", g_confirm_long_binding.keycode), g_confirm_long_binding.keycode);
     g_confirm_long_action = settings.GetString("cfm_l_act", g_confirm_long_action);
     g_shake_action = settings.GetString("shake_action", g_shake_action);
+    g_host_microphone_gate_enabled = settings.GetInt("mic_gate", 0) != 0;
     mclog::tagInfo(kTag,
                    "loaded input config: mode={} primary_mod=0x{:02x} primary_key=0x{:02x} confirm_mod=0x{:02x} confirm_key=0x{:02x} confirm_long={} confirm_long_mod=0x{:02x} confirm_long_key=0x{:02x} shake={} shake_mod=0x{:02x} shake_key=0x{:02x}",
                    input_mode_storage_value(),
@@ -268,6 +271,7 @@ void save_host_input_config()
     settings.SetInt("shake_mod", g_shake_binding.modifier);
     settings.SetInt("shake_key", g_shake_binding.keycode);
     settings.SetString("shake_action", g_shake_action);
+    settings.SetInt("mic_gate", g_host_microphone_gate_enabled ? 1 : 0);
     mclog::tagInfo(kTag,
                    "saved input config: mode={} primary_mod=0x{:02x} primary_key=0x{:02x} confirm_mod=0x{:02x} confirm_key=0x{:02x} confirm_long={} confirm_long_mod=0x{:02x} confirm_long_key=0x{:02x} shake={} shake_mod=0x{:02x} shake_key=0x{:02x}",
                    input_mode_storage_value(),
@@ -651,6 +655,23 @@ void apply_voice_payload(const std::string& payload)
         if (!shake_action.empty()) {
             g_shake_action = shake_action;
         }
+        const bool has_microphone_gate_field =
+            lower.find("\"microphone_gate_enabled\":") != std::string::npos;
+        if (lower.find("\"microphone_gate_enabled\":true") != std::string::npos) {
+            g_host_microphone_gate_enabled = true;
+        } else if (lower.find("\"microphone_gate_enabled\":false") != std::string::npos) {
+            g_host_microphone_gate_enabled = false;
+        }
+        if (has_microphone_gate_field) {
+            g_host_microphone_ready =
+                lower.find("\"microphone_ready\":true") != std::string::npos;
+        } else {
+            // Older Bridge releases do not publish microphone readiness. Keep
+            // their original immediate-HID behavior instead of blocking A
+            // forever when a newer firmware is paired with an older host app.
+            g_host_microphone_gate_enabled = false;
+            g_host_microphone_ready = false;
+        }
         ESP_LOGI(kTag,
                  "bridge config parsed: mode=%s primary_mod=0x%02x primary_key=0x%02x confirm_mod=0x%02x confirm_key=0x%02x confirm_long=%s confirm_long_mod=0x%02x confirm_long_key=0x%02x shake=%s shake_mod=0x%02x shake_key=0x%02x",
                  g_host_input_mode == HostInputMode::WechatIme ? "wechat_ime" : "typeless",
@@ -904,6 +925,9 @@ int gap_event(ble_gap_event* event, void*)
             g_connected = true;
             g_conn_handle = event->connect.conn_handle;
             g_status_text = "BLE connected";
+            // Readiness belongs to this GATT generation; never reuse the last
+            // connection's successful handshake.
+            g_host_microphone_ready = false;
             update_ble_battery_level();
             set_host_status("BLE connected");
             ESP_LOGI(kTag, "connected: handle=%d", event->connect.conn_handle);
@@ -925,6 +949,7 @@ int gap_event(ble_gap_event* event, void*)
         g_connected = false;
         g_paired = false;
         g_bridge_event_subscribed = false;
+        g_host_microphone_ready = false;
         g_companion_ready_tick = 0;
         g_companion_limited = false;
         g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
@@ -1398,6 +1423,15 @@ bool is_typeless_input_mode()
 {
     load_host_input_config();
     return g_host_input_mode == HostInputMode::Typeless;
+}
+
+bool microphone_voice_ready()
+{
+    load_host_input_config();
+    if (!g_host_microphone_gate_enabled) {
+        return true;
+    }
+    return g_host_microphone_ready && ble_microphone::voice_transport_ready();
 }
 
 void set_voice_capture_active(bool active)

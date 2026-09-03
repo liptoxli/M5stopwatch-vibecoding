@@ -1,6 +1,6 @@
 # StopWatch BLE microphone protocol
 
-Status: introduced in firmware v0.7.0 and updated for firmware v0.10.6 / StopWatch BLE Bridge v1.3.6. The v1.3.6 change is Mac-side output routing only; the BLE packet format is unchanged.
+Status: introduced in firmware v0.7.0 and updated for firmware v0.10.7 / StopWatch BLE Bridge v1.4.1. The v1.4.1 change adds a start-readiness handshake; the BLE audio packet format is unchanged.
 
 The microphone is an additive service on the same bonded BLE connection used
 by HID and the existing Bridge service. It does not replace the full StopWatch
@@ -66,6 +66,23 @@ read the first 20 bytes; v1.3.5 and later also expose transport diagnostics.
 Firmware keeps at least four shared mbufs available before it enqueues another
 high-rate audio notification. This prevents audio from starving HID, status,
 and subscription traffic when the controller queue is temporarily congested.
+
+## Voice-start readiness
+
+Firmware v0.10.7 and Bridge v1.4.1 add readiness fields to the existing
+`bridge_ready` JSON on the Companion service:
+
+- `microphone_gate_enabled`: the host has virtual microphone mode enabled.
+- `microphone_ready`: Control is discovered, Audio Notify is active,
+  arm-on-demand is acknowledged, the virtual output is healthy, and its route is
+  still an approved virtual device.
+
+Stats Notify is diagnostic and is not part of the blocking readiness gate. When
+the gate is enabled but not ready, firmware keeps at most one voice-start request,
+shows `MIC LINKING`, and waits up to 3000 ms. Readiness commits the HID shortcut
+once; timeout or cancellation enters the existing interrupted/retry flow. If the
+host payload has neither readiness field, firmware treats it as an older Bridge
+and retains the pre-v0.10.7 immediate-start behavior.
 
 ## Runtime behavior
 

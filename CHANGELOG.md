@@ -2,9 +2,27 @@
 
 本项目采用[语义化版本](https://semver.org/lang/zh-CN/)；所有版本更新都在这里记录，并使用同版本 Git 标签发布。
 
-此文件记录固件历史。Mac Bridge 独立更新：最新 **v1.4.0（2026-09-01）** 新增可选跨 Mac 额度与四小时活动同步，保留 v1.3.6 的虚拟麦克风路由保护；固件仍为 v0.10.6。详见 [Bridge Changelog](tools/typeless_bridge/CHANGELOG.md)。
+此文件记录固件历史。Mac Bridge 独立更新：最新 **v1.4.1（2026-09-03）** 与固件 v0.10.7 增加麦克风就绪握手，避免开机或重连后的第一次听写无声。详见 [Bridge Changelog](tools/typeless_bridge/CHANGELOG.md)。
 
 ## [Unreleased]
+
+## [0.10.7] - 2026-09-03
+
+### Changed
+
+- A/B 的开始语音操作改为先检查 Bridge 提供的麦克风就绪状态；未就绪时保留一次请求并显示 `MIC LINKING`。
+- 就绪条件包括 BLE 音频通知、按需录音武装、虚拟输出健康和安全路由验证；Stats 通知只参与诊断，不阻塞可用音频。
+- 新固件连接不包含就绪字段的旧 Bridge 时自动沿用旧启动行为，便于分步升级。
+
+### Fixed
+
+- 修复设备刚开机或 BLE 重连时，HID 已经可用但自定义音频链路仍在建立，导致 Typeless 被触发却收不到麦克风音频的问题。
+- 3 秒内仍未就绪时取消本次启动并进入可重试的中断状态，不把坏会话当成正常录音。
+
+### Verified
+
+- ESP-IDF v5.5.4 全量构建、USB 应用分区刷写和 Flash 哈希校验通过，实机固件为 v0.10.7。
+- Bridge v1.4.1 完成 Swift 构建和麦克风就绪、云同步、音频路由回归测试，并在 Mac mini 与 iMac 以各自稳定签名安装验证。
 
 ## [0.10.6] - 2026-08-25
 
@@ -322,7 +340,8 @@
 - 新增 Typeless/微信输入法输入模式、A/B 键绑定、摇晃清除和 BLE HID 输入。
 - 新增 Codex 额度 BLE 推送、隐私与安全说明、功能说明和 Pet 替换文档。
 
-[Unreleased]: https://github.com/liptoxli/M5stopwatch-vibecoding/compare/v0.10.6...HEAD
+[Unreleased]: https://github.com/liptoxli/M5stopwatch-vibecoding/compare/v0.10.7...HEAD
+[0.10.7]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.10.7
 [0.10.6]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.10.6
 [0.10.5]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.10.5
 [0.10.4]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v0.10.4

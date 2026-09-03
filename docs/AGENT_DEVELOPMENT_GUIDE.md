@@ -13,8 +13,8 @@
 
 | 组件 | 版本 | 已验证能力 |
 | --- | --- | --- |
-| StopWatch 固件 | v0.10.6 | 两套 UI、A/B 键、摇晃、实时 BLE 麦克风、额度、四小时热力图、四 Agent、推理滑动、中心四向 Radial、持久化配对保护、Vendor HID 在线自校验、开机录音意图锁存与 BLE 音频背压 |
-| macOS Bridge | v1.4.0 | 可选跨 Mac 额度与活动同步；保留 BLE Companion、Typeless、HID 恢复、固定虚拟输出和路由异常静音 |
+| StopWatch 固件 | v0.10.7 | 两套 UI、A/B 键、摇晃、实时 BLE 麦克风、额度、四小时热力图、四 Agent、推理滑动、中心四向 Radial、持久化配对保护、Vendor HID 在线自校验、开机录音就绪门控与 BLE 音频背压 |
+| macOS Bridge | v1.4.1 | 麦克风就绪握手、可选跨 Mac 额度与活动同步；保留 BLE Companion、Typeless、HID 恢复、固定虚拟输出和路由异常静音 |
 | 虚拟麦克风 | `M5 StopWatch Mic` | Bridge 解码 16 kHz 单声道 PCM，经采样率转换写入虚拟设备；当前回环验收设置为 48 kHz 双声道 |
 
 以下既有能力已经完成真实设备验收，可以作为回归基线；不代表 v1.3.6 的双机 Typeless 实测已全部完成：
@@ -186,6 +186,8 @@ Bridge 收到 `codex_reasoning:native_sync` 后延迟刷新确认标签。只有
 v0.10.5 起，A 键开始语音时先锁存用户意图。如果 macOS 的自定义音频服务尚未完成订阅，固件会在 `Armed + connected + subscribed` 都成立后自动开流，而不是丢弃第一次 A 键。等待超过 6 秒则取消本次 Typeless 输入并进入既有的录音异常提示，防止界面显示录音但没有音频。
 
 v0.10.6 起，音频任务在 NimBLE 共享 mbuf 紧张时最多等待 80ms，并保留至少 4 个 mbuf 给 HID、状态和 CCCD 流量。stats v4 在原有计数后增加 `last notify error`、`consecutive failures` 和 `free mbufs`。Bridge 在持续断流时先重建 Audio 订阅，60 秒内再次出错则重建 BLE 连接；仍会终止当前 Typeless 听写并让用户重说，不会自动拼接丢失的语音中段。
+
+v0.10.7 / Bridge v1.4.1 起，开始听写还要经过宿主就绪门控。Bridge 的 `bridge_ready` 配置增加 `microphone_gate_enabled` 和 `microphone_ready`：后者要求 Control 特征、Audio Notify、arm-on-demand、`outputHealthy` 与 `outputRouteValid` 同时成立，Stats Notify 只用于诊断。固件最多保留一个待启动请求，显示 `MIC LINKING`，每次只提交一次；`3000 ms` 超时后取消并进入中断提示。修改此逻辑时同时运行 `firmware-stopwatch-idf/tests/run_voice_start_gate_tests.sh` 与 `tools/typeless_bridge/tests/run_microphone_readiness_tests.sh`，不要只在单端改变字段含义。
 
 Bridge v1.3.6 的 Mac 音频出口使用显式 AUHAL，而不是依赖默认输出的音频引擎。入口是 `VirtualMicrophoneOutput`，路由门控是 `MicrophoneRouteGate`：
 

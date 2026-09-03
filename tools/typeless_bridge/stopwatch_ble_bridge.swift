@@ -2502,6 +2502,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
                 BridgeStatusCenter.shared.lastError = error.localizedDescription
                 log("Microphone subscription failed: \(error.localizedDescription)")
                 scheduleAuthenticationRecoveryIfNeeded(error, source: "microphone")
+                sendBridgeHeartbeat()
                 return
             }
             if characteristic.uuid == stopWatchMicrophoneAudioUUID {
@@ -2519,6 +2520,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
                     BridgeStatusCenter.shared.microphoneStatus = "Ready"
                 }
             }
+            sendBridgeHeartbeat()
             return
         }
         guard characteristic.uuid == eventUUID else { return }
@@ -2944,6 +2946,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             }
             microphonePipeline.stop()
             BridgeStatusCenter.shared.microphoneStatus = "Off"
+            sendBridgeHeartbeat()
             return
         }
 
@@ -2960,6 +2963,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         }
         guard let peripheral, let audio = microphoneAudioCharacteristic else {
             BridgeStatusCenter.shared.microphoneStatus = "Waiting for BLE"
+            sendBridgeHeartbeat()
             return
         }
         if !audio.isNotifying {
@@ -3044,6 +3048,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             }
             BridgeStatusCenter.shared.microphoneStatus = "Control failed"
             BridgeStatusCenter.shared.lastError = error.localizedDescription
+            sendBridgeHeartbeat()
             return
         }
         switch command {
@@ -3059,6 +3064,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         case .stopVoice:
             BridgeStatusCenter.shared.microphoneStatus = "Ready"
         }
+        sendBridgeHeartbeat()
     }
 
     private func startHealthLoop() {
@@ -3124,6 +3130,8 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
 
         let health = microphonePipeline.health(now: now)
         checkMicrophoneSessionFault(health, now: now)
+        // Payload deduplication makes this free unless readiness changed.
+        sendBridgeHeartbeat()
         if now.timeIntervalSince(lastMicrophoneHealthLogAt) >= 30 {
             lastMicrophoneHealthLogAt = now
             let packetAge = health.packetAge.map { String(format: "%.2f", $0) } ?? "--"
@@ -3184,6 +3192,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         }
 
         if !audio.isNotifying && !microphoneResubscribePending {
+            sendBridgeHeartbeat()
             peripheral.setNotifyValue(true, for: audio)
         } else if health.outputHealthy && (health.packetAge.map { $0 <= 3.0 } ?? false) {
             BridgeStatusCenter.shared.microphoneStatus = "Streaming"
@@ -3211,6 +3220,7 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
         let confirm = hidReportBinding(settings.rightKey)
         let confirmLong = hidActionBinding(settings.confirmLongActionName, customKey: settings.confirmLongKey)
         let shake = settings.shakeKey.map(hidReportBinding) ?? (modifier: UInt8(0), keycode: UInt8(0))
+        let microphoneReady = microphoneReadyForVoice()
         let payload: [String: Any] = [
             "type": "bridge_ready",
             "version": 1,
@@ -3224,13 +3234,30 @@ private final class StopWatchBleBridge: NSObject, CBCentralManagerDelegate, CBPe
             "confirm_long_key": Int(confirmLong.keycode),
             "shake_action": settings.shakeActionName,
             "shake_modifier": Int(shake.modifier),
-            "shake_key": Int(shake.keycode)
+            "shake_key": Int(shake.keycode),
+            "microphone_gate_enabled": settings.virtualMicrophoneEnabled,
+            "microphone_ready": microphoneReady
         ]
         if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
            let text = String(data: data, encoding: .utf8) {
             return text
         }
-        return "{\"type\":\"bridge_ready\",\"version\":1,\"input_mode\":\"\(mode)\"}"
+        let gateEnabled = settings.virtualMicrophoneEnabled ? "true" : "false"
+        let ready = microphoneReady ? "true" : "false"
+        return "{\"type\":\"bridge_ready\",\"version\":1,\"input_mode\":\"\(mode)\",\"microphone_gate_enabled\":\(gateEnabled),\"microphone_ready\":\(ready)}"
+    }
+
+    private func microphoneReadyForVoice() -> Bool {
+        let health = microphonePipeline.health()
+        return MicrophoneReadinessSnapshot(
+            enabled: SettingsStore.shared.settings.virtualMicrophoneEnabled,
+            hasControl: microphoneControlCharacteristic != nil,
+            audioSubscribed: microphoneAudioCharacteristic?.isNotifying == true,
+            statsSubscribed: microphoneStatsCharacteristic?.isNotifying == true,
+            armed: microphoneOnDemandSupported == true,
+            outputHealthy: health.outputHealthy,
+            outputRouteValid: health.outputRouteValid
+        ).ready
     }
 
     private func sendBridgeLimited() {

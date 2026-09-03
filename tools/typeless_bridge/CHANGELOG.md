@@ -2,6 +2,24 @@
 
 Mac Bridge 使用独立语义化版本。固件与 Bridge 的兼容版本关系见仓库根目录 [README](../../README.md#版本历史)。
 
+## [1.4.1] - 2026-09-03
+
+### Changed
+
+- Bridge 将音频通知、按需录音已武装、虚拟输出健康与路由校验合并为一个“麦克风已就绪”信号；Stats 通知继续用于诊断，但不会阻塞其他条件均正常的音频。
+- 固件收到 A/B 的开始请求后，若音频通道尚未就绪，会保留一次请求并显示 `MIC LINKING`，就绪后只提交一次 Typeless 按键。
+
+### Fixed
+
+- 修复设备刚开机或 BLE 重连时，HID 已可用但自定义音频通知尚未完成，导致 Typeless 已启动而虚拟麦克风无声的竞态。
+- 3 秒内仍未就绪时取消本次录音并进入可重试的中断提示，不再把坏会话当成正常录音。
+- 新固件临时搭配旧 Bridge 时自动退回旧行为，避免因旧版本不包含就绪字段而锁死 A 键。
+
+### Validation
+
+- Bridge 完整 Swift 构建通过；麦克风就绪判定、固件延迟启动、云同步与虚拟音频路由回归测试通过。
+- 固件 v0.10.7 完成 ESP-IDF v5.5.4 全量构建、USB 应用刷写和哈希校验；Bridge v1.4.1 已在 Mac mini 与 iMac 使用各自稳定签名安装验证。
+
 ## [1.4.0] - 2026-09-01
 
 ### Added
@@ -314,6 +332,8 @@ Mac Bridge 使用独立语义化版本。固件与 Bridge 的兼容版本关系�
 - 支持 `M5Codex-*` 连接、Codex 额度推送、输入模式和按键配置同步。
 - 支持 Typeless 状态观察、LaunchAgent 安装和 arm64 ZIP 发布包。
 
+[1.4.1]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v1.4.1
+[1.4.0]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v1.4.0
 [1.3.5]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v1.3.5
 [1.3.4]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v1.3.4
 [1.3.3]: https://github.com/liptoxli/M5stopwatch-vibecoding/tree/v1.3.3

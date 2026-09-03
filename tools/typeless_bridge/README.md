@@ -2,7 +2,7 @@
 
 StopWatch BLE Bridge is the macOS companion app for the M5 StopWatch Codex firmware.
 
-Current version: **v1.4.0**. Full version history: [CHANGELOG.md](CHANGELOG.md).
+Current version: **v1.4.1**. Full version history: [CHANGELOG.md](CHANGELOG.md).
 
 It provides local functions including:
 
@@ -107,6 +107,21 @@ open compatibility issue; the app does not force device-rate changes. The BLE
 microphone stream itself remains 16 kHz and needs no change.
 
 Each BLE packet carries 320 decoded samples (20 ms): 14 bytes of protocol header plus 160 bytes of ADPCM. The steady wire rate is about 8.7 KB/s, while decoded PCM is 32 KB/s. No WAV container or recording file is used.
+
+### Voice-start readiness (v1.4.1)
+
+The Bridge publishes one combined `microphone_ready` flag to firmware. It is true
+only when microphone mode is enabled, the Control characteristic exists, Audio
+notifications are subscribed, arm-on-demand was acknowledged, the virtual output
+is healthy, and its route still points to the approved virtual device. The Stats
+subscription remains useful for diagnostics but does not block otherwise valid
+audio.
+
+Firmware v0.10.7 holds one pending A/B voice-start request while this flag is
+false. It shows `MIC LINKING`, commits the HID shortcut once when readiness
+arrives, and cancels after 3 seconds so a silent Typeless session is not treated
+as successful. Firmware v0.10.7 falls back to the former immediate behavior when
+paired temporarily with an older Bridge that does not publish readiness fields.
 
 The product installer adds the Core Audio HAL driver. Driver installation requires macOS administrator authorization and restarts Core Audio.
 

@@ -6,6 +6,7 @@
 #pragma once
 #include "codex_quota_client.h"
 #include "view/view.h"
+#include "voice_start_gate.h"
 #include <apps/common/key_manager/key_manager.h>
 #include <mooncake.h>
 #include <memory>
@@ -24,6 +25,7 @@ private:
     void handleTouchControls();
     void handlePrimaryInputDown(const char* sourceKey);
     void handlePrimaryInputUp(const char* sourceKey);
+    void pollPendingVoiceStart(uint32_t now);
     bool shouldRouteConfirmAsPrimary() const;
     void enterVoiceInterrupted(uint32_t now);
     void updateBatteryStatusBar(uint32_t now);
@@ -49,6 +51,7 @@ private:
     bool _confirm_long_sent = false;
     bool _confirm_routes_to_primary = false;
     bool _voice_session_interrupted = false;
+    VoiceStartGate _voice_start_gate;
     uint32_t _primary_input_down_ms = 0;
     uint32_t _voice_mode_since_ms = 0;
     uint32_t _fault_first_vibration_at_ms = 0;

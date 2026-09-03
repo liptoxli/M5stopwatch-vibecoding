@@ -590,6 +590,13 @@ bool is_streaming()
     return mode == StreamMode::Continuous || (mode == StreamMode::Armed && g_voice_requested.load());
 }
 
+bool voice_transport_ready()
+{
+    return g_connected.load() &&
+           g_audio_subscribed.load() &&
+           g_stream_mode.load() == StreamMode::Armed;
+}
+
 void begin_voice_input()
 {
     request_voice_start();

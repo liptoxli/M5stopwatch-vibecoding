@@ -28,6 +28,7 @@ bool is_enabled();
 bool is_connected();
 bool disconnect_current();
 bool is_typeless_input_mode();
+bool microphone_voice_ready();
 void set_voice_capture_active(bool active);
 bool voice_session_interrupted();
 bool consume_voice_start_timeout();
