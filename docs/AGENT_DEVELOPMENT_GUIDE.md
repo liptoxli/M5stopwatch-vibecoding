@@ -13,7 +13,7 @@
 
 | 组件 | 版本 | 已验证能力 |
 | --- | --- | --- |
-| StopWatch 固件 | v0.10.7 | 两套 UI、A/B 键、摇晃、实时 BLE 麦克风、额度、四小时热力图、四 Agent、推理滑动、中心四向 Radial、持久化配对保护、Vendor HID 在线自校验、开机录音就绪门控与 BLE 音频背压 |
+| StopWatch 固件 | v0.10.9 | 保留两套 UI、A/B、麦克风、额度、四 Agent、推理与 Radial；新增经二次确认的配对恢复、重复订阅清理及订阅容量保护 |
 | macOS Bridge | v1.4.1 | 麦克风就绪握手、可选跨 Mac 额度与活动同步；保留 BLE Companion、Typeless、HID 恢复、固定虚拟输出和路由异常静音 |
 | 虚拟麦克风 | `M5 StopWatch Mic` | Bridge 解码 16 kHz 单声道 PCM，经采样率转换写入虚拟设备；当前回环验收设置为 48 kHz 双声道 |
 
@@ -27,7 +27,8 @@
 - BLE 重新配对后，Bridge、虚拟麦克风和 Codex Vendor HID 可以同时工作。
 - Bridge 必须等待 macOS 原生 IOHID 设备出现后再连接自定义服务；不要移除这一配对时序保护。
 - 不要在 `BLE_GAP_EVENT_REPEAT_PAIRING` 回调中自动删除 peer；NimBLE 会先删除安全密钥再删除 CCCD，后一步失败会留下下次启动无法恢复的半删除 bond。
-- 统一 HID、Bridge、麦克风、电池和 Service Changed 当前会持久化 10 条 CCCD，`CONFIG_BT_NIMBLE_MAX_CCCDS` 不得低于 16。
+- 统一 HID、Bridge、麦克风、电池和 Service Changed 每主机约持久化 10 条 CCCD；v0.10.9 全局 `CONFIG_BT_NIMBLE_MAX_CCCDS=32`，编译断言要求至少为 `MAX_BONDS × 10`。订阅溢出不能静默删除其他电脑的密钥。
+- 配对恢复必须由用户确认，经重启在 `nimble_port_init()` 之前完成；只清空专用 `nimble_bond` namespace，验证为空后才完成 `ble_bridge/pair_reset` 请求。不能改成逐条 `ble_store_clear()` 或擦除整个 NVS；详见 [配对恢复与参数](BLUETOOTH_PAIRING.md)。
 - 新录音开始前会预检虚拟输入和实际输出路由，空闲超过 8 秒或输出不健康时重建输出管线。
 - Typeless 未运行时，Bridge 会在后台启动它，等待快捷键注册后补发当前这一次 A 键；修改这条链路时必须保留单次补发和超时保护。
 
@@ -67,6 +68,7 @@ Mac 本机 Codex 状态
 | Codex 配置 | `firmware-stopwatch-idf/main/apps/app_codex/codex_config.h` | 示例 URL、刷新周期、Wi-Fi 占位符和输入默认值 |
 | 面板解析 | `firmware-stopwatch-idf/main/apps/app_codex/codex_quota_client.cpp` | 接收 Bridge/HTTP 面板，解析额度、活动和推理标签 |
 | BLE Companion | `firmware-stopwatch-idf/main/hal/ble_bridge.cpp`、`ble_bridge.h` | 配对、标准按键、Bridge 状态、面板分片和 task 摘要 |
+| 配对恢复 | `main/hal/pairing_reset_policy.h`、`main/apps/app_setup/workers/device.cpp`（固件目录内） | 重置确认、请求持久化、初始化前清除与验证；状态机测试在 `firmware-stopwatch-idf/tests/` |
 | Codex Micro HID | `firmware-stopwatch-idf/main/hal/codex_micro_hid.cpp`、`.h` | 统一 HID Report Map、Vendor RPC、Agent、Encoder、Radial、宿主灯效状态 |
 | BLE 麦克风 | `firmware-stopwatch-idf/main/hal/ble_microphone.cpp`、`.h` | 音频任务、20ms 分帧、通知、按需启停和统计 |
 | ADPCM | `firmware-stopwatch-idf/main/hal/ima_adpcm.cpp`、`.h` | PCM 与 4-bit IMA-ADPCM 编解码 |
@@ -400,6 +402,7 @@ idf.py build
 - Codex access token、account ID 或 `auth.json` 内容。
 - Apple Developer 签名身份和证书。
 - 云同步真实 endpoint、account_scope、device_id、token、数据库、个人部署手册或安装备份。
+- 原始 NVS/Flash 备份、蓝牙配对密钥、主机地址和用户 UUID；公开配对诊断仅保留脱敏错误码、版本与记录数量。
 - 未经许可的第三方二进制或素材。
 
 公开 `codex_config.h` 必须保留 `example.com` 和 `YOUR_WIFI_*` 占位符。Bridge 可以读取当前用户本机的 `~/.codex/auth.json`，但不得记录、复制或打包其中的凭据。

@@ -151,6 +151,14 @@ F13, F14, F15, F16, F17, F18, F19, F20, Return, Space, Tab, Escape
 
 ## Menu Bar Status
 
+### Pairing recovery (firmware v0.10.9+)
+
+If macOS has forgotten the device but StopWatch retains its old bond, repeated pairing attempts can fail. Use **Settings → Bluetooth → Reset pairing → Reset & restart** on StopWatch, then re-pair `M5Codex-*` in macOS. This removes all saved computer bonds but preserves other device settings. Forget the old macOS entry once only if it still exists; normal upgrades and restarts do not reset pairing.
+
+Firmware v0.10.9 also fixes a reset failure caused by duplicate persisted subscriptions in older stores. This is a firmware-only repair; it does not require reinstalling the Bridge or virtual microphone. Quitting the Bridge alone does not disconnect macOS-managed native HID. See [Bluetooth pairing and recovery](../../docs/BLUETOOTH_PAIRING.md) for steps, diagnostics, and verification limits.
+
+### Status indicators
+
 The menu bar app shows:
 
 - BLE connection status.

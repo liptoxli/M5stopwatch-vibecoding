@@ -27,6 +27,9 @@ void set_enabled(bool enabled);
 bool is_enabled();
 bool is_connected();
 bool disconnect_current();
+// Persist an explicit user request. The caller reboots; clearing happens
+// before NimBLE initializes its store, never in a live pairing callback.
+bool request_pairing_reset();
 bool is_typeless_input_mode();
 bool microphone_voice_ready();
 void set_voice_capture_active(bool active);

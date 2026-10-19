@@ -217,9 +217,12 @@ private:
         lv_obj_set_style_bg_opa(switch_widget->get(), LV_OPA_COVER, LV_PART_KNOB);
         lv_obj_set_style_border_width(switch_widget->get(), 0, LV_PART_KNOB);
         lv_obj_set_style_radius(switch_widget->get(), LV_RADIUS_CIRCLE, LV_PART_KNOB);
-        switch_widget->setBgColor(lv_color_hex(0x53BD65), LV_PART_INDICATOR | LV_STATE_CHECKED);
-        switch_widget->setBgOpa(LV_OPA_COVER, LV_PART_INDICATOR | LV_STATE_CHECKED);
-        switch_widget->setBorderWidth(0, LV_PART_INDICATOR | LV_STATE_CHECKED);
+        const lv_style_selector_t checked_indicator =
+            static_cast<lv_style_selector_t>(LV_PART_INDICATOR) |
+            static_cast<lv_style_selector_t>(LV_STATE_CHECKED);
+        switch_widget->setBgColor(lv_color_hex(0x53BD65), checked_indicator);
+        switch_widget->setBgOpa(LV_OPA_COVER, checked_indicator);
+        switch_widget->setBorderWidth(0, checked_indicator);
         switch_widget->onValueChanged().connect(onChanged);
 
         _labels.push_back(std::move(label));
@@ -252,7 +255,7 @@ public:
 
         _row = std::make_unique<Container>(_panel->get());
         _row->setSize(374, 119);
-        _row->align(LV_ALIGN_TOP_MID, 0, 130);
+        _row->align(LV_ALIGN_TOP_MID, 0, 54);
         _row->setBgColor(lv_color_hex(0x4C4C4C));
         _row->setBorderWidth(0);
         _row->setShadowWidth(0);
@@ -278,15 +281,18 @@ public:
         lv_obj_set_style_bg_opa(_switch->get(), LV_OPA_COVER, LV_PART_KNOB);
         lv_obj_set_style_border_width(_switch->get(), 0, LV_PART_KNOB);
         lv_obj_set_style_radius(_switch->get(), LV_RADIUS_CIRCLE, LV_PART_KNOB);
-        _switch->setBgColor(lv_color_hex(0x53BD65), LV_PART_INDICATOR | LV_STATE_CHECKED);
-        _switch->setBgOpa(LV_OPA_COVER, LV_PART_INDICATOR | LV_STATE_CHECKED);
-        _switch->setBorderWidth(0, LV_PART_INDICATOR | LV_STATE_CHECKED);
+        const lv_style_selector_t checked_indicator =
+            static_cast<lv_style_selector_t>(LV_PART_INDICATOR) |
+            static_cast<lv_style_selector_t>(LV_STATE_CHECKED);
+        _switch->setBgColor(lv_color_hex(0x53BD65), checked_indicator);
+        _switch->setBgOpa(LV_OPA_COVER, checked_indicator);
+        _switch->setBorderWidth(0, checked_indicator);
         _switch->onValueChanged().connect([this](bool enabled) { _enabled = enabled; });
 
         _ok_button = std::make_unique<Button>(_panel->get());
-        _ok_button->align(LV_ALIGN_CENTER, 0, 175);
-        _ok_button->setSize(374, 130);
-        _ok_button->setRadius(77);
+        _ok_button->align(LV_ALIGN_CENTER, 0, 164);
+        _ok_button->setSize(260, 68);
+        _ok_button->setRadius(34);
         _ok_button->setBorderWidth(0);
         _ok_button->setShadowWidth(0);
         _ok_button->setBgColor(lv_color_hex(0x4AD78C));
@@ -297,7 +303,7 @@ public:
         _ok_button->onClick().connect([this]() { _save_requested = true; });
 
         _disconnect_button = std::make_unique<Button>(_panel->get());
-        _disconnect_button->align(LV_ALIGN_CENTER, 0, 68);
+        _disconnect_button->align(LV_ALIGN_CENTER, 0, -10);
         _disconnect_button->setSize(300, 72);
         _disconnect_button->setRadius(36);
         _disconnect_button->setBorderWidth(0);
@@ -308,6 +314,59 @@ public:
         _disconnect_button->label().setTextColor(lv_color_hex(0xDDEBFF));
         _disconnect_button->label().align(LV_ALIGN_CENTER, 0, 0);
         _disconnect_button->onClick().connect([this]() { _disconnect_requested = true; });
+
+        _reset_button = std::make_unique<Button>(_panel->get());
+        _reset_button->align(LV_ALIGN_CENTER, 0, 78);
+        _reset_button->setSize(300, 72);
+        _reset_button->setRadius(36);
+        _reset_button->setBorderWidth(0);
+        _reset_button->setShadowWidth(0);
+        _reset_button->setBgColor(lv_color_hex(0x29253F));
+        _reset_button->label().setText("Reset pairing");
+        _reset_button->label().setTextFont(&lv_font_montserrat_22);
+        _reset_button->label().setTextColor(lv_color_hex(0xDDD7FF));
+        _reset_button->onClick().connect([this]() { _reset_panel->removeFlag(LV_OBJ_FLAG_HIDDEN); });
+
+        _reset_panel = std::make_unique<Container>(_panel->get());
+        _reset_panel->setSize(466, 466);
+        _reset_panel->align(LV_ALIGN_CENTER, 0, 0);
+        _reset_panel->setPaddingAll(0);
+        _reset_panel->setBorderWidth(0);
+        _reset_panel->setRadius(0);
+        _reset_panel->setBgColor(lv_color_hex(0x000000));
+        _reset_panel->setBgOpa(LV_OPA_COVER);
+        _reset_panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+
+        _reset_hint = std::make_unique<Label>(_reset_panel->get());
+        _reset_hint->setText("Reset Bluetooth pairing?\n\nSaved computers will be removed.\nOther settings stay unchanged.\nReconnect on your Mac afterwards.");
+        _reset_hint->setTextFont(&lv_font_montserrat_20);
+        _reset_hint->setTextColor(lv_color_hex(0xD5D7E6));
+        lv_obj_set_width(_reset_hint->get(), 320);
+        lv_obj_set_style_text_align(_reset_hint->get(), LV_TEXT_ALIGN_CENTER, 0);
+        _reset_hint->align(LV_ALIGN_TOP_MID, 0, 84);
+
+        _confirm_reset_button = std::make_unique<Button>(_reset_panel->get());
+        _confirm_reset_button->setSize(280, 72);
+        _confirm_reset_button->align(LV_ALIGN_CENTER, 0, 80);
+        _confirm_reset_button->setRadius(36);
+        _confirm_reset_button->setBorderWidth(0);
+        _confirm_reset_button->setBgColor(lv_color_hex(0x39345B));
+        _confirm_reset_button->label().setText("Reset & restart");
+        _confirm_reset_button->label().setTextFont(&lv_font_montserrat_22);
+        _confirm_reset_button->label().setTextColor(lv_color_hex(0xEEE9FF));
+        _confirm_reset_button->onClick().connect([this]() { _reset_requested = true; });
+
+        _cancel_reset_button = std::make_unique<Button>(_reset_panel->get());
+        _cancel_reset_button->setSize(240, 64);
+        _cancel_reset_button->align(LV_ALIGN_CENTER, 0, 164);
+        _cancel_reset_button->setRadius(32);
+        _cancel_reset_button->setBorderWidth(0);
+        _cancel_reset_button->setBgColor(lv_color_hex(0x1B2230));
+        _cancel_reset_button->label().setText("Cancel");
+        _cancel_reset_button->label().setTextFont(&lv_font_montserrat_22);
+        _cancel_reset_button->label().setTextColor(lv_color_hex(0xCFD8EE));
+        _cancel_reset_button->onClick().connect([this]() { _reset_panel->addFlag(LV_OBJ_FLAG_HIDDEN); });
+        _reset_panel->addFlag(LV_OBJ_FLAG_HIDDEN);
     }
 
     bool enabled() const
@@ -329,6 +388,18 @@ public:
         return requested;
     }
 
+    bool consumeResetRequested()
+    {
+        const bool requested = _reset_requested;
+        _reset_requested = false;
+        return requested;
+    }
+
+    void showResetError()
+    {
+        _reset_hint->setText("Could not save reset request.\n\nNo reset performed.\nPlease try again.");
+    }
+
 private:
     std::unique_ptr<Container> _panel;
     std::unique_ptr<Container> _row;
@@ -336,9 +407,15 @@ private:
     std::unique_ptr<Switch> _switch;
     std::unique_ptr<Button> _ok_button;
     std::unique_ptr<Button> _disconnect_button;
+    std::unique_ptr<Button> _reset_button;
+    std::unique_ptr<Container> _reset_panel;
+    std::unique_ptr<Label> _reset_hint;
+    std::unique_ptr<Button> _confirm_reset_button;
+    std::unique_ptr<Button> _cancel_reset_button;
     bool _enabled        = false;
     bool _save_requested = false;
     bool _disconnect_requested = false;
+    bool _reset_requested = false;
 };
 
 class CodexThemeWorker::CodexThemeView {
@@ -525,6 +602,16 @@ void BluetoothWorker::update()
     if (_view && _view->consumeDisconnectRequested()) {
         ble_bridge::disconnect_current();
         GetHAL().vibrate(35, 120);
+    }
+
+    if (_view && _view->consumeResetRequested()) {
+        if (ble_bridge::request_pairing_reset()) {
+            GetHAL().vibrate(60, 120);
+            GetHAL().delay(100);
+            GetHAL().reboot();
+        } else {
+            _view->showResetError();
+        }
     }
 }
 

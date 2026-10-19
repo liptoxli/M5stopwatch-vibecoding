@@ -4,6 +4,7 @@
 #include "ble_bridge.h"
 #include "codex_micro_hid.h"
 #include "ble_microphone.h"
+#include "pairing_reset_policy.h"
 
 #include <apps/app_codex/codex_config.h>
 #include "hal.h"
@@ -32,6 +33,7 @@
 #include <mooncake_log.h>
 #include <nimble/nimble_port.h>
 #include <nimble/nimble_port_freertos.h>
+#include <nvs.h>
 #include <os/os_mbuf.h>
 #include <services/bas/ble_svc_bas.h>
 #include <services/dis/ble_svc_dis.h>
@@ -52,6 +54,12 @@ constexpr uint16_t kAppearanceKeyboard = 0x03C1;
 constexpr uint16_t kVendorId = 0x303A;
 constexpr uint16_t kProductId = 0x8360;
 constexpr int32_t kBondSchemaVersion = 2;
+constexpr const char* kPairingResetKey = "pair_reset";
+constexpr const char* kPairingStoreNamespace = "nimble_bond";
+// One host uses ten persisted subscriptions (keyboard/vendor/Companion/mic).
+// A shared table smaller than all supported bonds can evict another host.
+static_assert(CONFIG_BT_NIMBLE_MAX_CCCDS >= CONFIG_BT_NIMBLE_MAX_BONDS * 10,
+              "Persisted subscriptions must accommodate every supported bonded host");
 constexpr uint8_t kKeyboardReportId = 1;
 constexpr uint8_t kKeyEnter = 0x28;
 constexpr uint8_t kKeyBackspace = 0x2A;
@@ -1062,6 +1070,89 @@ int gap_event(ble_gap_event* event, void*)
     }
 }
 
+class PairingResetStore {
+public:
+    explicit PairingResetStore(nvs_handle_t handle, bool pending) : handle_(handle), pending_(pending) {}
+
+    bool requested() const { return pending_; }
+
+    bool clear()
+    {
+        // Run before nimble_port_init(), so no in-memory bond cache exists.
+        // SDK per-record deletion cannot remove duplicate CCCDs reliably:
+        // its RAM/NVS difference search matches values, not their multiplicity.
+        // Only this dedicated namespace belongs to the Bluetooth bond store.
+        nvs_handle_t bonds = 0;
+        esp_err_t err = nvs_open(kPairingStoreNamespace, NVS_READWRITE, &bonds);
+        if (err == ESP_OK) {
+            err = nvs_erase_all(bonds);
+            if (err == ESP_OK) {
+                err = nvs_commit(bonds);
+            }
+            nvs_close(bonds);
+        }
+        ESP_LOGI(kTag, "explicit pairing reset: namespace clear=%s", esp_err_to_name(err));
+        return err == ESP_OK;
+    }
+
+    bool empty()
+    {
+        nvs_iterator_t it = nullptr;
+        const esp_err_t err = nvs_entry_find("nvs", kPairingStoreNamespace, NVS_TYPE_ANY, &it);
+        if (it != nullptr) {
+            nvs_release_iterator(it);
+        }
+        const bool verified = err == ESP_ERR_NVS_NOT_FOUND;
+        ESP_LOGI(kTag, "explicit pairing reset: namespace empty=%d result=%s",
+                 verified, esp_err_to_name(err));
+        return verified;
+    }
+
+    bool acknowledge()
+    {
+        esp_err_t err = nvs_set_u8(handle_, kPairingResetKey, 0);
+        if (err == ESP_OK) {
+            err = nvs_commit(handle_);
+        }
+        if (err != ESP_OK) {
+            ESP_LOGE(kTag, "pairing reset acknowledgement failed: %s", esp_err_to_name(err));
+        }
+        return err == ESP_OK;
+    }
+
+private:
+    nvs_handle_t handle_;
+    bool pending_;
+};
+
+bool complete_requested_pairing_reset()
+{
+    nvs_handle_t handle = 0;
+    esp_err_t err = nvs_open("ble_bridge", NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "pairing recovery storage unavailable: %s", esp_err_to_name(err));
+        return false;
+    }
+    uint8_t pending = 0;
+    err = nvs_get_u8(handle, kPairingResetKey, &pending);
+    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGE(kTag, "pairing recovery request unreadable: %s", esp_err_to_name(err));
+        nvs_close(handle);
+        return false;
+    }
+    PairingResetStore store(handle, pending != 0);
+    const auto result = pairing_reset::complete_pending_reset(store);
+    nvs_close(handle);
+    if (result == pairing_reset::Result::Completed) {
+        ESP_LOGI(kTag, "explicit pairing reset complete; ready for new pairing");
+        set_host_status("Ready to pair");
+    } else if (result != pairing_reset::Result::NotRequested) {
+        ESP_LOGE(kTag, "pairing reset incomplete: stage=%d; request retained for retry", static_cast<int>(result));
+        return false;
+    }
+    return true;
+}
+
 void sync_callback()
 {
     g_started = true;
@@ -1329,11 +1420,34 @@ bool setup_hid_services()
     return true;
 }
 
+int store_status_callback(ble_store_status_event* event, void* arg)
+{
+    if (event->event_code == BLE_STORE_EVENT_OVERFLOW &&
+        (event->overflow.obj_type == BLE_STORE_OBJ_TYPE_CCCD ||
+         event->overflow.obj_type == BLE_STORE_OBJ_TYPE_CSFC)) {
+        // The default round-robin callback unpairs another host to make room
+        // for subscriptions. Preserve its security keys and report the full
+        // subscription table instead; the user can explicitly reset pairing.
+        ESP_LOGE(kTag, "subscription store full: type=%d; preserving all bonded hosts",
+                 event->overflow.obj_type);
+        return BLE_HS_ESTORE_CAP;
+    }
+    return ble_store_util_status_rr(event, arg);
+}
+
 void start_ble()
 {
     load_host_input_config();
     if (g_started) {
         advertise();
+        return;
+    }
+
+    // Persistent reset must finish before NimBLE restores its RAM store.
+    // Never advertise with a partial reset, nor erase live pairing state.
+    if (!complete_requested_pairing_reset()) {
+        g_status_text = "Pairing reset failed";
+        set_host_status("Pairing reset failed");
         return;
     }
 
@@ -1359,7 +1473,7 @@ void start_ble()
     }
 
     ble_store_config_init();
-    ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
+    ble_hs_cfg.store_status_cb = store_status_callback;
 
     esp_err_t err = esp_nimble_enable(reinterpret_cast<void*>(host_task));
     if (err != ESP_OK) {
@@ -1416,6 +1530,27 @@ bool disconnect_current()
         return false;
     }
     mclog::tagInfo(kTag, "disconnect requested: handle={}", handle);
+    return true;
+}
+
+bool request_pairing_reset()
+{
+    nvs_handle_t handle = 0;
+    esp_err_t err = nvs_open("ble_bridge", NVS_READWRITE, &handle);
+    if (err == ESP_OK) {
+        err = nvs_set_u8(handle, kPairingResetKey, 1);
+        if (err == ESP_OK) {
+            err = nvs_commit(handle);
+        }
+        nvs_close(handle);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "cannot persist pairing reset request: %s", esp_err_to_name(err));
+        set_host_status("Pairing reset failed");
+        return false;
+    }
+    ESP_LOGI(kTag, "user confirmed pairing reset; deferred until reboot before advertising");
+    set_host_status("Restart to pair");
     return true;
 }
 

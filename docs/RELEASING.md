@@ -24,11 +24,14 @@ macOS Bridge 使用独立版本，单一版本源为 `tools/typeless_bridge/VERS
 
 ```bash
 tools/check_version.sh
+bash firmware-stopwatch-idf/tests/run_pairing_reset_policy_tests.sh
 cd firmware-stopwatch-idf
 idf.py build
 ```
 
 首次安装或分区表/Bootloader 发生变化时必须执行完整 `idf.py flash`。`idf.py app-flash` 只用于已经具有兼容分区布局的设备。
+
+`CMakeLists.txt` 显式跟踪 `version.txt`，防止增量构建复用旧版本；刷写后仍须从设备启动日志核对 `App version`，不能只检查源码或界面字符串。配对相关改动还须按 [配对恢复说明](BLUETOOTH_PAIRING.md) 验证真实存储、广播与重新连接，不把状态机单测当成完整实机验收。
 
 合并到 `main` 后创建同名标签和 GitHub Release，例如 `v0.6.0`。不得重复使用或移动已经发布的版本标签；新改动先记录在 `CHANGELOG.md` 的 `Unreleased`，发布时再转入新版本条目。
 
